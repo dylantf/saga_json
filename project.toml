@@ -1,0 +1,9 @@
+[project]
+name = "saga_json"
+
+[bin]
+main = "src/Main.saga"
+
+[library]
+module = "SagaJson"
+expose = ["SagaJson"]

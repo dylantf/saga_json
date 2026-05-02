@@ -1,0 +1,109 @@
+#@ JSON parsing.
+#@
+#@ Parsers are functions `Json -> a needs {Fail Error}`. Compose by ordinary
+#@ function call; failures short-circuit through the Fail handler.
+module SagaJson
+
+import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
+import Std.Dynamic (Dynamic, DecodeError, Decoder)
+import Std.Fail (Fail)
+
+#@ A parsed JSON value. Navigate with `field`, decode with `string`, `int`, etc.
+opaque type Json = Json Dynamic
+
+#@ Error returned when a JSON value doesn't match the expected shape.
+pub type Error =
+  | Error (expected: String) (found: String) (path: List String)
+  deriving (Eq, Debug)
+
+fun lift_err : DecodeError -> Error
+lift_err e = case e {
+  DecodeError exp found path -> Error exp found path
+}
+
+# --- Entry point ---
+
+@external("erlang", "json_bridge", "parse_string")
+fun parse_string_raw : String -> Result Dynamic String
+
+#@ Parse a JSON string into a Json value.
+pub fun parse_string : String -> Result Json String
+parse_string s = case parse_string_raw s {
+  Ok dyn -> Ok (Json dyn)
+  Err msg -> Err msg
+}
+
+# --- Internal helpers ---
+
+fun unwrap : Json -> Dynamic
+unwrap j = case j {
+  Json d -> d
+}
+
+fun decode_with : Decoder a -> Json -> a needs {Fail Error}
+decode_with dec j = case Std.Dynamic.decode dec (unwrap j) {
+  Ok v -> v
+  Err e -> fail! (lift_err e)
+}
+
+# --- Primitive decoders ---
+
+#@ Decode a JSON string value.
+pub fun string : Json -> String needs {Fail Error}
+string j = decode_with Std.Dynamic.string j
+
+#@ Decode a JSON integer value.
+pub fun int : Json -> Int needs {Fail Error}
+int j = decode_with Std.Dynamic.int j
+
+#@ Decode a JSON float value.
+pub fun float : Json -> Float needs {Fail Error}
+float j = decode_with Std.Dynamic.float j
+
+#@ Decode a JSON boolean value.
+pub fun bool : Json -> Bool needs {Fail Error}
+bool j = decode_with Std.Dynamic.bool j
+
+# --- Navigation ---
+
+#@ Navigate to a named field in a JSON object.
+pub fun field : String -> Json -> Json needs {Fail Error}
+field name j = case Std.Dynamic.decode_field name (Decoder (fun x ->
+  Ok x)) (unwrap j) {
+  Ok dyn -> Json dyn
+  Err e -> fail! (lift_err e)
+}
+
+# --- Combinators ---
+
+@external("erlang", "json_bridge", "to_list")
+fun to_list_raw : Dynamic -> Result (List Dynamic) DecodeError
+
+fun map_each : (Json -> a needs {Fail Error, ..e}) -> List Dynamic -> List a
+  needs {Fail Error, ..e}
+map_each f xs = case xs {
+  [] -> []
+  h :: t -> {
+    let v = f (Json h)
+    let rest = map_each f t
+    v :: rest
+  }
+}
+
+#@ Decode a JSON array, applying `decoder` to each element.
+pub fun list_of : (Json -> a needs {Fail Error, ..e}) -> Json -> List a
+  needs {Fail Error, ..e}
+list_of decoder j = case to_list_raw (unwrap j) {
+  Ok items -> map_each decoder items
+  Err e -> fail! (lift_err e)
+}
+
+@external("erlang", "json_bridge", "is_null")
+fun is_null_raw : Dynamic -> Bool
+
+#@ Decode a JSON value that may be null. Returns Nothing for null,
+#@ Just (decoder value) otherwise.
+pub fun nullable : (Json -> a needs {Fail Error, ..e}) -> Json -> Maybe a
+  needs {Fail Error, ..e}
+nullable decoder j =
+  if is_null_raw (unwrap j) then Nothing else Just (decoder j)

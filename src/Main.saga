@@ -1,0 +1,88 @@
+module Main
+
+import Std.Fail (Fail)
+import Std.IO (console)
+import SagaJson as J (Json, Error)
+
+val user_json = """
+  {
+    "id": 42,
+    "name": "Alice",
+    "active": true,
+    "manager": null,
+    "balance": 1234.56,
+    "roles": ["admin", "editor"],
+    "address": {
+      "street": "123 Main St",
+      "city": "Springfield",
+      "zip": "12345",
+      "coords": {
+        "lat": 40.7128,
+        "lng": -74.006
+      }
+    },
+    "tags": []
+  }
+  """
+
+record Coords {
+  lat: Float,
+  lng: Float,
+} deriving (Debug)
+
+record Address {
+  street: String,
+  city: String,
+  zip: String,
+  coords: Coords,
+} deriving (Debug)
+
+record User {
+  id: Int,
+  name: String,
+  active: Bool,
+  manager: Maybe String,
+  balance: Float,
+  roles: List String,
+  address: Address,
+  tags: List String,
+} deriving (Debug)
+
+handler to_result for Fail a {
+  fail err = Err err
+  return v = Ok v
+}
+
+fun parse_coords : Json -> Coords needs {Fail Error}
+parse_coords json = Coords {
+  lat: J.float (J.field "lat" json),
+  lng: J.float (J.field "lng" json),
+}
+
+fun parse_address : Json -> Address needs {Fail Error}
+parse_address json = Address {
+  street: J.string (J.field "street" json),
+  city: J.string (J.field "city" json),
+  zip: J.string (J.field "zip" json),
+  coords: parse_coords (J.field "coords" json),
+}
+
+fun parse_user : Json -> User needs {Fail Error}
+parse_user json = User {
+  id: J.int (J.field "id" json),
+  name: J.string (J.field "name" json),
+  active: J.bool (J.field "active" json),
+  manager: J.nullable J.string (J.field "manager" json),
+  balance: J.float (J.field "balance" json),
+  roles: J.list_of J.string (J.field "roles" json),
+  address: parse_address (J.field "address" json),
+  tags: J.list_of J.string (J.field "tags" json),
+}
+
+main () = case J.parse_string user_json {
+  Err msg -> println $"parse error: {msg}"
+  Ok json -> {
+    let result: Result User Error = parse_user json with to_result
+    println (debug result)
+  }
+} with console
