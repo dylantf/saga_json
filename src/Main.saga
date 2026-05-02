@@ -74,6 +74,44 @@ parse_user json = User {
   tags: J.list_of J.string (J.field "tags" json),
 }
 
-main () =
-  J.parse parse_user user_json
-  |> dbg
+fun show_int_err : Result Int J.Error -> String
+show_int_err r = case r {
+  Ok n -> $"Ok {n}"
+  Err e -> case e {
+    J.InvalidJson m -> $"InvalidJson {m}"
+    J.InvalidShape exp found path -> $"InvalidShape expected={exp} found={found} path={debug path}"
+  }
+}
+
+handler local_to_result for Fail a {
+  fail e = Err e
+  return v = Ok v
+}
+
+# Decoder that always fails — no JSON parsing involved.
+fun always_fail : Json -> Int needs {Fail J.Error}
+always_fail _j = fail! (J.InvalidShape "Int" "Whatever" [])
+
+fun decode_int_id : Json -> Int needs {Fail J.Error}
+decode_int_id j = J.int (J.field "id" j)
+
+main () = {
+  # C: J.run with decoder that uses J.int+J.field on bad input
+  case J.parse_string """{"id": "wrong"}""" {
+    Err _ -> println "couldn't parse"
+    Ok json -> {
+      let r = J.run decode_int_id json
+      case r {
+        Ok _ -> println "C: Ok (bad)"
+        Err _ -> println "C: Err (good)"
+      }
+    }
+  }
+
+  # D: J.parse with same decoder
+  let r2 = J.parse decode_int_id """{"id": "wrong"}"""
+  case r2 {
+    Ok _ -> println "D: Ok (bad)"
+    Err _ -> println "D: Err (good)"
+  }
+} with console
