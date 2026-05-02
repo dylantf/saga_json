@@ -2,7 +2,7 @@ module Main
 
 import Std.Fail (Fail)
 import Std.IO (console)
-import SagaJson as J (Json, Error)
+import SagaJson as J (Json)
 
 val user_json = """
   {
@@ -48,18 +48,13 @@ record User {
   tags: List String,
 } deriving (Debug)
 
-handler to_result for Fail a {
-  fail err = Err err
-  return v = Ok v
-}
-
-fun parse_coords : Json -> Coords needs {Fail Error}
+fun parse_coords : Json -> Coords needs {Fail J.Error}
 parse_coords json = Coords {
   lat: J.float (J.field "lat" json),
   lng: J.float (J.field "lng" json),
 }
 
-fun parse_address : Json -> Address needs {Fail Error}
+fun parse_address : Json -> Address needs {Fail J.Error}
 parse_address json = Address {
   street: J.string (J.field "street" json),
   city: J.string (J.field "city" json),
@@ -67,7 +62,7 @@ parse_address json = Address {
   coords: parse_coords (J.field "coords" json),
 }
 
-fun parse_user : Json -> User needs {Fail Error}
+fun parse_user : Json -> User needs {Fail J.Error}
 parse_user json = User {
   id: J.int (J.field "id" json),
   name: J.string (J.field "name" json),
@@ -79,10 +74,6 @@ parse_user json = User {
   tags: J.list_of J.string (J.field "tags" json),
 }
 
-main () = case J.parse_string user_json {
-  Err msg -> println $"parse error: {msg}"
-  Ok json -> {
-    let result: Result User Error = parse_user json with to_result
-    println (debug result)
-  }
-} with console
+main () =
+  J.parse parse_user user_json
+  |> dbg

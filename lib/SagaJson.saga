@@ -11,26 +11,43 @@ import Std.Fail (Fail)
 #@ A parsed JSON value. Navigate with `field`, decode with `string`, `int`, etc.
 opaque type Json = Json Dynamic
 
-#@ Error returned when a JSON value doesn't match the expected shape.
+#@ Error returned when JSON parsing or decoding fails.
 pub type Error =
-  | Error (expected: String) (found: String) (path: List String)
+  | InvalidJson String # syntactically invalid JSON
+  | InvalidShape (expected: String) (found: String) (path: List String)
   deriving (Eq, Debug)
 
 fun lift_err : DecodeError -> Error
 lift_err e = case e {
-  DecodeError exp found path -> Error exp found path
+  DecodeError exp found path -> InvalidShape exp found path
 }
 
-# --- Entry point ---
+handler to_result for Fail a {
+  fail e = Err e
+  return v = Ok v
+}
 
-@external("erlang", "json_bridge", "parse_string")
+# --- Entry points ---
+
+@external("erlang", "saga_json_bridge", "parse_string")
 fun parse_string_raw : String -> Result Dynamic String
 
-#@ Parse a JSON string into a Json value.
-pub fun parse_string : String -> Result Json String
+#@ Parse a JSON string into a Json value, without applying a decoder.
+pub fun parse_string : String -> Result Json Error
 parse_string s = case parse_string_raw s {
   Ok dyn -> Ok (Json dyn)
-  Err msg -> Err msg
+  Err msg -> Err (InvalidJson msg)
+}
+
+#@ Apply a decoder to an already-parsed Json value, returning a Result.
+pub fun run : (Json -> a needs {Fail Error}) -> Json -> Result a Error
+run decoder j = decoder j with to_result
+
+#@ Parse a JSON string and apply a decoder in one step.
+pub fun parse : (Json -> a needs {Fail Error}) -> String -> Result a Error
+parse decoder s = case parse_string s {
+  Ok j -> run decoder j
+  Err e -> Err e
 }
 
 # --- Internal helpers ---
@@ -76,7 +93,7 @@ field name j = case Std.Dynamic.decode_field name (Decoder (fun x ->
 
 # --- Combinators ---
 
-@external("erlang", "json_bridge", "to_list")
+@external("erlang", "saga_json_bridge", "to_list")
 fun to_list_raw : Dynamic -> Result (List Dynamic) DecodeError
 
 fun map_each : (Json -> a needs {Fail Error, ..e}) -> List Dynamic -> List a
@@ -98,7 +115,7 @@ list_of decoder j = case to_list_raw (unwrap j) {
   Err e -> fail! (lift_err e)
 }
 
-@external("erlang", "json_bridge", "is_null")
+@external("erlang", "saga_json_bridge", "is_null")
 fun is_null_raw : Dynamic -> Bool
 
 #@ Decode a JSON value that may be null. Returns Nothing for null,
