@@ -16,12 +16,29 @@ val user_json = """
       "street": "123 Main St",
       "city": "Springfield",
       "zip": "12345",
-      "coords": {
-        "lat": 40.7128,
-        "lng": -74.006
-      }
+      "coords": { "lat": 40.7128, "lng": -74.006 }
     },
     "tags": []
+  }
+  """
+
+val bad_shape = """
+  {"id": "wrong", "name": "Alice"}
+  """
+val bad_syntax = """
+  {"id": 1, "name":}
+  """
+# Deeply nested failure to exercise path prefixing.
+
+
+val nested_bad = """
+  {
+    "id": 1, "name": "x", "active": true, "manager": null,
+    "balance": 0.0, "roles": [], "tags": [],
+    "address": {
+      "street": "a", "city": "b", "zip": "c",
+      "coords": { "lat": "not a float", "lng": 0.0 }
+    }
   }
   """
 
@@ -50,30 +67,44 @@ record User {
 
 fun parse_coords : Json -> Coords needs {Fail J.Error}
 parse_coords json = Coords {
-  lat: J.float (J.field "lat" json),
-  lng: J.float (J.field "lng" json),
+  lat: J.at "lat" J.float json,
+  lng: J.at "lng" J.float json,
 }
 
 fun parse_address : Json -> Address needs {Fail J.Error}
 parse_address json = Address {
-  street: J.string (J.field "street" json),
-  city: J.string (J.field "city" json),
-  zip: J.string (J.field "zip" json),
-  coords: parse_coords (J.field "coords" json),
+  street: J.at "street" J.string json,
+  city: J.at "city" J.string json,
+  zip: J.at "zip" J.string json,
+  coords: J.at "coords" parse_coords json,
 }
 
 fun parse_user : Json -> User needs {Fail J.Error}
 parse_user json = User {
-  id: J.int (J.field "id" json),
-  name: J.string (J.field "name" json),
-  active: J.bool (J.field "active" json),
-  manager: J.nullable J.string (J.field "manager" json),
-  balance: J.float (J.field "balance" json),
-  roles: J.list_of J.string (J.field "roles" json),
-  address: parse_address (J.field "address" json),
-  tags: J.list_of J.string (J.field "tags" json),
+  id: J.at "id" J.int json,
+  name: J.at "name" J.string json,
+  active: J.at "active" J.bool json,
+  manager: J.at "manager" (J.nullable J.string) json,
+  balance: J.at "balance" J.float json,
+  roles: J.at "roles" (J.list_of J.string) json,
+  address: J.at "address" parse_address json,
+  tags: J.at "tags" (J.list_of J.string) json,
 }
 
-main () =
+main () = {
+  dbg "--- happy path ---"
   J.parse parse_user user_json
   |> dbg
+
+  dbg "--- bad shape ---"
+  J.parse parse_user bad_shape
+  |> dbg
+
+  dbg "--- bad syntax ---"
+  J.parse parse_user bad_syntax
+  |> dbg
+
+  dbg "--- nested bad shape ---"
+  J.parse parse_user nested_bad
+  |> dbg
+}
