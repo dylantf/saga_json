@@ -52,6 +52,12 @@ classify v = case v {
 fun shape_err : String -> Json -> a needs {Fail Error}
 shape_err expected j = fail! (InvalidShape expected (classify (unwrap j)) [])
 
+fun prefix_path : String -> Error -> Error
+prefix_path seg e = case e {
+  InvalidShape exp found path -> InvalidShape exp found (seg :: path)
+  other -> other
+}
+
 # --- Entry points ---
 
 #@ Parse a JSON string into a Json value, without applying a decoder.
@@ -117,6 +123,13 @@ field name j = case unwrap j {
     Nothing -> fail! (InvalidShape $"field '{name}'" "missing" [name])
   }
   _ -> fail! (InvalidShape $"Object with field '{name}'" (classify (unwrap j)) [])
+}
+
+#@ Navigate to a named field and apply `decoder` to it. Prefixes the
+#@ field name onto the path of any error raised inside `decoder`.
+pub fun at : String -> (Json -> a needs {Fail Error, ..e}) -> Json -> a needs {Fail Error, ..e}
+at name decoder j = decoder (field name j) with {
+  fail e = fail! (prefix_path name e)
 }
 
 # --- Combinators ---
