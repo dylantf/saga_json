@@ -23,8 +23,7 @@ string s = from_value (VString s)
 pub fun int : Int -> Json
 int n = from_value (VInt n)
 
-#@ Encode a `Float` as a JSON number. Erlang has no NaN/Infinity; any
-#@ float Saga can hold renders as a valid JSON number.
+#@ Encode a `Float` as a JSON number.
 pub fun float : Float -> Json
 float f = from_value (VFloat f)
 
