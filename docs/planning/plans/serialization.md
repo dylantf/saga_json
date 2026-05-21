@@ -335,22 +335,64 @@ pub fun derive_with : Options -> a -> Json where {a: Generic a r, ToJson r}
 derive_with opts x = to_json_with opts (to x)
 ```
 
-**Then, eight Generic building-block impls**, matching the [Generic Deriving guide](../../../../../saga-website/app/content/guide/generic-deriving.md):
+**Then, the four-trait Generic dispatch.** See the design doc's "Why four traits" section for rationale — short version: producing a Json AST (vs string fragments) means building blocks need to know which syntactic position they're in. Single-trait approaches (singleton-wrapping, role-method) require either runtime shape-sniffing or convention-enforced invariants. Four traits gives compile-time enforcement via non-overlapping helper traits — the same pattern GHC.Generics uses (`K1` / `M1` / `:+:` / `:*:`) and that aeson follows.
+
+Trait definitions (only `ToJson` is `pub`):
 
 ```
-impl ToJson for U1                                          { ... }
-impl ToJson for Leaf a    where {a: ToJson}                 { ... }
-impl ToJson for Labeled a where {a: ToJson}                 { ... }
-impl ToJson for Variant a where {a: ToJson}                 { ... }
-impl ToJson for And l r   where {l: ToJson, r: ToJson}      { ... }
-impl ToJson for Or l r    where {l: ToJson, r: ToJson}      { ... }
-impl ToJson for Record a  where {a: ToJson}                 { ... }
-impl ToJson for Adt a     where {a: ToJson}                 { ... }
+pub trait ToJson a {
+  fun to_json_with : Options -> a -> Json
+  fun to_json      : a -> Json
+  to_json x = to_json_with default_options x
+}
+
+trait ToJsonFields a {
+  fun to_fields : Options -> a -> List (String, Json)
+}
+
+trait ToJsonArgs a {
+  fun to_args : Options -> a -> List Json
+}
+
+trait VariantPayload a {
+  fun payload_json : Options -> a -> Json
+}
 ```
 
-`Record` emits `{` ... `}` and forwards inner; `Labeled` + `And` produce the `"key": value, "key": value` interior; `Variant` formats sum-constructor tags; `Adt` is usually pass-through but is the hook for sum-level framing.
+Twelve impls total (some Rep types implement multiple helper traits — that's fine, no overlap):
 
-Each impl provides `to_json_with` (inheriting `to_json` from the trait default). **Discipline:** inside building-block impls, always recurse via `to_json_with o`, never bare `to_json` — bare `to_json` drops options on the floor. This is exactly the pattern in [examples/99k](../../../../../saga/examples/99k-generic-derived-defaults.saga); follow it line-for-line.
+```
+# ToJson (assembles Json values, including a passthrough for Leaf in record-field position)
+impl ToJson for Leaf a    where {a: ToJson}                                { ... }
+impl ToJson for Or l r    where {l: ToJson, r: ToJson}                     { ... }
+impl ToJson for Record a  where {a: ToJsonFields}                          { ... }
+impl ToJson for Variant a where {a: VariantPayload}                        { ... }
+impl ToJson for Adt a     where {a: ToJson}                                { ... }
+
+# ToJsonFields (record-interior dispatch)
+impl ToJsonFields for Labeled a where {a: ToJson}                          { ... }
+impl ToJsonFields for And l r   where {l: ToJsonFields, r: ToJsonFields}   { ... }
+
+# ToJsonArgs (variant-arg-list dispatch)
+impl ToJsonArgs for Leaf a where {a: ToJson}                               { ... }
+impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs}           { ... }
+
+# VariantPayload (variant payload by arity)
+impl VariantPayload for U1                                                 { ... }
+impl VariantPayload for Leaf a where {a: ToJson}                           { ... }
+impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs}       { ... }
+```
+
+`Leaf a` participates in three traits — that's not overlap, those are three distinct traits with three distinct method names. The compiler picks the right impl based on which trait is required by the surrounding constraint.
+
+What each role does:
+
+- **`ToJsonFields`** — produces `List (String, Json)`. `Labeled` emits a single pair, `And` of two field-producers concats them. Consumed by `Record`, which wraps the result in a `VObject`.
+- **`ToJsonArgs`** — produces `List Json`. `Leaf` emits a single value, `And` of two arg-producers concats them. Consumed by `VariantPayload` for multi-arg variants.
+- **`VariantPayload`** — produces the Json that goes after the variant name. `U1` → null, `Leaf` → the unwrapped value, `And-of-Leaves` → a JSON array of the args.
+- **`ToJson`** — the public trait. `Record` wraps fields, `Variant` emits `{name: payload}`, `Or` forwards to whichever side has the value, `Adt` is passthrough.
+
+**Discipline:** inside building-block impls, always thread Options via `*_with opts` calls. Bare `to_json` (the default-options variant) drops Options on the floor — same footgun as before, same mitigation (regression test that encodes a deeply nested value with non-default options and asserts the leaf reflects them).
 
 ```
 # Options
@@ -398,8 +440,8 @@ Update [src/Main.saga](../../../src/Main.saga):
 
 ### Parallelizable subtasks
 
-- Grow trait to two-method shape; update Phase 2 impls to `to_json_with` — agent A
-- Rep building-block impls (8 of them) — agent A or B, after trait grows
+- Grow `ToJson` trait to two-method shape; declare helper traits (`ToJsonFields`, `ToJsonArgs`, `VariantPayload`, library-internal); update Phase 2 impls to `to_json_with` — agent A
+- Building-block impls (12 of them across 4 traits) — agent A or B, after traits declared
 - `Options` types + `default_options` + `derive_with` helper — agent C
 - Name-style helpers (`camel_case : String -> String` etc.) — agent D, independent
 - `Main.saga` examples (including the Options-threading regression test) — depends on all above

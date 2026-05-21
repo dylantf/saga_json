@@ -102,46 +102,251 @@ unicode_escape c = {
   BS.from_string $"\\u00{padded}"
 }
 
-# --- ToJson trait ---
+# --- Options ---
+#
+# Uniform encoding knobs. Per-field renames / per-field overrides live in
+# hand-written impls; `Options` is restricted to whole-record policies.
 
-#@ Types that can be encoded as JSON. Hand-write `to_json` for your own
-#@ records and ADTs by composing the primitive constructors. Once Generic
-#@ deriving lands, `deriving (ToJson)` will synthesize this for you.
-pub trait ToJson a {
-  fun to_json : a -> Json
+#@ How record field names and (eventually) variant names are transformed
+#@ before emission. Source convention is snake_case Saga identifiers.
+pub type NameStyle =
+  | AsIs
+  | CamelCase
+  | KebabCase
+  | SnakeCase
+  | ScreamingSnakeCase
+
+#@ How sum-type variants are tagged in the emitted JSON. Only
+#@ `ExternallyTagged` is implemented in Phase 4; the others are placeholders.
+# TODO Phase 4.x: implement AdjacentlyTagged / InternallyTagged / Untagged.
+pub type TagFormat =
+  | ExternallyTagged
+  | AdjacentlyTagged
+  | InternallyTagged
+  | Untagged
+
+#@ Uniform encoder options. Construct with record syntax; start from
+#@ `default_options` and override with `{ default_options | field: value }`.
+pub record Options {
+  rename_all: NameStyle,
+  omit_nothing: Bool,
+  tag_format: TagFormat,
+  tag_field: String,
+  content_field: String,
 }
 
+#@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
+#@ externally-tagged sums.
+pub val default_options = Options {
+  rename_all: AsIs,
+  omit_nothing: False,
+  tag_format: ExternallyTagged,
+  tag_field: "tag",
+  content_field: "content",
+}
+
+# --- Name-style helpers ---
+#
+# Source names are assumed snake_case per serde convention. Each transformer
+# operates on a single identifier string.
+
+fun apply_name_style : NameStyle -> String -> String
+apply_name_style ns s = case ns {
+  AsIs -> s
+  SnakeCase -> s
+  CamelCase -> snake_to_camel s
+  KebabCase -> String.replace_all "_" "-" s
+  ScreamingSnakeCase -> String.to_upper s
+}
+
+fun snake_to_camel : String -> String
+snake_to_camel s = case String.split "_" s {
+  [] -> s
+  h :: rest -> h <> String.join "" (List.map capitalize rest)
+}
+
+fun capitalize : String -> String
+capitalize s = {
+  let n = String.length s
+  if n == 0 then s
+  else String.to_upper (String.slice 0 1 s) <> String.slice 1 (n - 1) s
+}
+
+# --- ToJson trait + helpers ---
+#
+# The public `ToJson` trait has the two-method shape from
+# `saga/examples/99k`. Library code provides building-block impls for
+# `to_json_with`; the default body for `to_json` forwards through
+# `default_options`. Hand-written user impls only need `to_json_with`.
+#
+# Three additional traits — `ToJsonFields`, `ToJsonArgs`, `VariantPayload` —
+# are library-internal and handle the three syntactic positions a Rep can
+# occupy (record interior, variant arg list, variant payload). Splitting
+# them gives compile-time non-overlap; see `docs/planning/serialization.md`
+# section "Why four traits".
+
+#@ Types that can be encoded as JSON. Hand-write `to_json_with` for your
+#@ own records and ADTs (the `to_json` convenience is inherited from the
+#@ trait default), or write `deriving (ToJson)`.
+pub trait ToJson a {
+  fun to_json_with : Options -> a -> Json
+  fun to_json : a -> Json
+  to_json x = to_json_with default_options x
+}
+
+# Library-internal: produces a list of (field-name, value) pairs. Used by
+# `Record` to assemble its inner object.
+trait ToJsonFields a {
+  fun to_fields : Options -> a -> List (String, Json)
+}
+
+# Library-internal: produces a list of positional JSON args. Used by a
+# multi-arg `VariantPayload`.
+trait ToJsonArgs a {
+  fun to_args : Options -> a -> List Json
+}
+
+# Library-internal: produces the payload Json that follows the variant
+# name in `{name: payload}` (or whatever the active TagFormat dictates).
+trait VariantPayload a {
+  fun payload_json : Options -> a -> Json
+}
+
+# --- Primitive + container impls (ToJson) ---
+
 impl ToJson for String {
-  to_json s = string s
+  to_json_with _ s = string s
 }
 
 impl ToJson for Int {
-  to_json n = int n
+  to_json_with _ n = int n
 }
 
 impl ToJson for Float {
-  to_json f = float f
+  to_json_with _ f = float f
 }
 
 impl ToJson for Bool {
-  to_json b = bool b
+  to_json_with _ b = bool b
 }
 
 impl ToJson for List a where {a: ToJson} {
-  to_json xs = array (List.map to_json xs)
+  to_json_with opts xs = array (List.map (fun x -> to_json_with opts x) xs)
 }
 
 impl ToJson for Maybe a where {a: ToJson} {
-  to_json m = case m {
+  to_json_with opts m = case m {
     Nothing -> null
-    Just x -> to_json x
+    Just x -> to_json_with opts x
   }
 }
 
-#@ Encode a value to a compact JSON string. Equivalent to
-#@ `render (to_json x)`.
+# --- Building-block impls for the Generic Rep ---
+#
+# Twelve impls across four traits. Some Rep types appear in multiple
+# syntactic positions and therefore implement multiple helper traits —
+# `Leaf a` participates in three. The traits are disjoint, so there is
+# no overlap.
+
+# ToJson — assembles complete Json values. Leaf-as-ToJson is the
+# passthrough used when a leaf sits inside a Labeled in a record field.
+impl ToJson for Leaf a where {a: ToJson} {
+  to_json_with opts (Leaf x) = to_json_with opts x
+}
+
+impl ToJson for Or l r where {l: ToJson, r: ToJson} {
+  to_json_with opts v = case v {
+    Or_Left x -> to_json_with opts x
+    Or_Right x -> to_json_with opts x
+  }
+}
+
+impl ToJson for Record a where {a: ToJsonFields} {
+  to_json_with opts (Record _ inner) = {
+    let fields = to_fields opts inner
+    let kept = if opts.omit_nothing then drop_null_fields fields else fields
+    object kept
+  }
+}
+
+impl ToJson for Variant a where {a: VariantPayload} {
+  to_json_with opts (Variant name payload) =
+    object [(name, payload_json opts payload)]
+}
+
+impl ToJson for Adt a where {a: ToJson} {
+  to_json_with opts (Adt _ inner) = to_json_with opts inner
+}
+
+# ToJsonFields — record-interior dispatch.
+impl ToJsonFields for Labeled a where {a: ToJson} {
+  to_fields opts (Labeled name x) = [
+    (apply_name_style opts.rename_all name, to_json_with opts x),
+  ]
+}
+
+impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {
+  to_fields opts (And l r) = List.append (to_fields opts l) (to_fields opts r)
+}
+
+# ToJsonArgs — variant-arg-list dispatch.
+impl ToJsonArgs for Leaf a where {a: ToJson} {
+  to_args opts (Leaf x) = [to_json_with opts x]
+}
+
+impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  to_args opts (And l r) = List.append (to_args opts l) (to_args opts r)
+}
+
+# VariantPayload — by arity. U1 → null, Leaf → unwrapped value, And-of-args
+# → JSON array.
+impl VariantPayload for U1 {
+  payload_json _ _ = null
+}
+
+impl VariantPayload for Leaf a where {a: ToJson} {
+  payload_json opts (Leaf x) = to_json_with opts x
+}
+
+impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  payload_json opts v = case v {
+    And l r -> array (List.append (to_args opts l) (to_args opts r))
+  }
+}
+
+# `omit_nothing` is implemented post-hoc on the produced fields. The
+# building-block impls don't know a field's source type, only its
+# rendered Json — a Maybe Nothing has already become `null` by the time
+# Record assembles fields, so we filter null values out. A user impl
+# that deliberately emits `null` for a non-Maybe field will also be
+# dropped under `omit_nothing: True`; documented limitation.
+fun drop_null_fields : List (String, Json) -> List (String, Json)
+drop_null_fields pairs = List.filter not_null_pair pairs
+
+fun not_null_pair : (String, Json) -> Bool
+not_null_pair (_, j) = case to_value j {
+  VNull -> False
+  _ -> True
+}
+
+# --- Layer-3 helpers ---
+
+#@ Encode a value to a compact JSON string using default options.
+#@ Equivalent to `render (to_json x)`.
 pub fun serialize : a -> String where {a: ToJson}
 serialize x = render (to_json x)
+
+#@ Encode a value to a compact JSON string using the given options.
+#@ Equivalent to `render (to_json_with opts x)`.
+pub fun serialize_with : Options -> a -> String where {a: ToJson}
+serialize_with opts x = render (to_json_with opts x)
+
+#@ The derive-then-tweak escape hatch. Calls the Generic-derived encoding
+#@ explicitly, so a hand-written `impl ToJson` can start from the derived
+#@ shape and post-process. Without this, the trait dispatch can't reach
+#@ the derived impl — the hand-written impl shadows it.
+pub fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
+derive_with opts x = to_json_with opts (to x)
 
 # --- Post-process combinators ---
 #

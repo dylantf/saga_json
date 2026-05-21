@@ -1,0 +1,162 @@
+module DerivingTest
+
+import Std.Test (Testing, describe, test, assert_eq)
+import SagaJson.Encode as E (
+  ToJson,
+  serialize,
+  serialize_with,
+  Options,
+  NameStyle,
+  default_options
+)
+
+# --- Types under test ---
+
+record PersonD {
+  name: String,
+  age: Int,
+} deriving (ToJson)
+
+# Conflict rule: per the Generic Deriving guide, a hand-written impl is
+# supposed to silently win over `deriving (ToJson)`. As of this writing,
+# the compiler raises a duplicate-impl error instead. Surfaced to the
+# design owner; test omitted until the compiler accepts the pattern.
+
+type Shape =
+  | Triangle
+  | Circle Int
+  | Rect Int Int
+  deriving (ToJson)
+
+type IntList =
+  | INil
+  | ICons Int IntList
+  deriving (ToJson)
+
+# Deeply nested record — exercises Options-threading at every level.
+record InnerR {
+  first_name: String,
+  last_name: String,
+} deriving (ToJson)
+
+record MiddleR {
+  user_info: InnerR,
+  account_id: Int,
+} deriving (ToJson)
+
+record OuterR {
+  primary_user: MiddleR,
+} deriving (ToJson)
+
+# Maybe-bearing record for omit_nothing testing.
+record Settings {
+  name: String,
+  nickname: Maybe String,
+} deriving (ToJson)
+
+# Helper: build an Options value with a single field overridden from
+# defaults. The record-spread shorthand isn't (yet) supported in Saga, so
+# we spell out each field.
+fun with_rename_all : NameStyle -> Options
+with_rename_all ns = { default_options | rename_all: ns }
+
+fun with_omit_nothing : Bool -> Options
+with_omit_nothing flag = { default_options | omit_nothing: flag }
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "Deriving (ToJson)" (fun () -> {
+    describe "derived records" (fun () -> {
+      test "flat record" (fun () ->
+        assert_eq
+          (serialize (PersonD { name: "Alice", age: 30 }))
+          "{\"name\":\"Alice\",\"age\":30}")
+    })
+
+    describe "derived ADTs (externally tagged)" (fun () -> {
+      test "unit variant -> {\"Triangle\":null}" (fun () ->
+        assert_eq (serialize Triangle) "{\"Triangle\":null}")
+
+      test "single-arg variant unwraps payload" (fun () ->
+        assert_eq (serialize (Circle 7)) "{\"Circle\":7}")
+
+      test "multi-arg variant uses array payload" (fun () ->
+        assert_eq (serialize (Rect 3 4)) "{\"Rect\":[3,4]}")
+
+      test "recursive type round-trips through the trait dict" (fun () ->
+        assert_eq
+          (serialize (ICons 1 (ICons 2 (ICons 3 INil))))
+          "{\"ICons\":[1,{\"ICons\":[2,{\"ICons\":[3,{\"INil\":null}]}]}]}")
+    })
+
+    describe "Options-threading" (fun () -> {
+      # If any building-block impl recurses via bare `to_json` instead of
+      # `to_json_with`, the rename_all option gets dropped somewhere in
+      # the tree. This test catches that: the *leaf-most* field must be
+      # camelCased too.
+      test "rename_all: CamelCase reaches the deepest leaf field" (fun () -> {
+        let nested = OuterR {
+          primary_user: MiddleR {
+            user_info: InnerR {
+              first_name: "Ada",
+              last_name: "Lovelace",
+            },
+            account_id: 7,
+          },
+        }
+        let got = serialize_with (with_rename_all E.CamelCase) nested
+        let want = "{\"primaryUser\":{\"userInfo\":{\"firstName\":\"Ada\",\"lastName\":\"Lovelace\"},\"accountId\":7}}"
+        assert_eq got want
+      })
+
+      test "rename_all: KebabCase converts underscores to dashes" (fun () ->
+        assert_eq
+          (serialize_with
+            (with_rename_all E.KebabCase)
+            (MiddleR {
+              user_info: InnerR { first_name: "Ada", last_name: "Lovelace" },
+              account_id: 7,
+            }))
+          "{\"user-info\":{\"first-name\":\"Ada\",\"last-name\":\"Lovelace\"},\"account-id\":7}")
+
+      test "rename_all: ScreamingSnakeCase uppercases" (fun () ->
+        assert_eq
+          (serialize_with
+            (with_rename_all E.ScreamingSnakeCase)
+            (InnerR { first_name: "Ada", last_name: "L" }))
+          "{\"FIRST_NAME\":\"Ada\",\"LAST_NAME\":\"L\"}")
+    })
+
+    describe "omit_nothing" (fun () -> {
+      test "default (False) emits null for Nothing field" (fun () ->
+        assert_eq
+          (serialize (Settings { name: "x", nickname: Nothing }))
+          "{\"name\":\"x\",\"nickname\":null}")
+
+      test "True drops Nothing field" (fun () ->
+        assert_eq
+          (serialize_with
+            (with_omit_nothing True)
+            (Settings { name: "x", nickname: Nothing }))
+          "{\"name\":\"x\"}")
+
+      test "True keeps Just" (fun () ->
+        assert_eq
+          (serialize_with
+            (with_omit_nothing True)
+            (Settings { name: "x", nickname: Just "xx" }))
+          "{\"name\":\"x\",\"nickname\":\"xx\"}")
+    })
+
+    describe "byte-for-byte match with hand-written" (fun () -> {
+      test "derived encoding matches hand-built object" (fun () -> {
+        let p = PersonD { name: "Alice", age: 30 }
+        let hand = E.render (E.object [
+          ("name", E.string "Alice"),
+          ("age", E.int 30),
+        ])
+        assert_eq (serialize p) hand
+      })
+    })
+  })
+}

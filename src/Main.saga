@@ -4,7 +4,7 @@ import Std.Fail (Fail)
 import Std.IO (console)
 import SagaJson as J (Json)
 import SagaJson.Decode as D
-import SagaJson.Encode as E (ToJson)
+import SagaJson.Encode as E (ToJson, Options, NameStyle, default_options)
 
 val user_json = """
   {
@@ -100,12 +100,35 @@ parse_user json = User {
 # `to_json u.roles` dispatches to `ToJson for List a where {a: ToJson}`
 # which in turn calls `ToJson for String`, etc.
 
+# --- Phase 4: derived impls + Options-threading demo ---
+#
+# Hand-written impls (above) and derived impls (below) coexist freely.
+# The hand-written impls demonstrate that the four-trait split doesn't
+# disturb the manual path.
+
+type Role =
+  | Admin
+  | Editor
+  | Viewer
+  deriving (ToJson)
+
+record Profile {
+  first_name: String,
+  last_name: String,
+  role: Role,
+} deriving (ToJson)
+
+record Account {
+  user_info: Profile,
+  account_id: Int,
+} deriving (ToJson)
+
 impl E.ToJson for Coords {
-  to_json c = E.object [("lat", to_json c.lat), ("lng", to_json c.lng)]
+  to_json_with _ c = E.object [("lat", to_json c.lat), ("lng", to_json c.lng)]
 }
 
 impl E.ToJson for Address {
-  to_json a =
+  to_json_with _ a =
     E.object [
       ("street", to_json a.street),
       ("city", to_json a.city),
@@ -115,7 +138,7 @@ impl E.ToJson for Address {
 }
 
 impl E.ToJson for User {
-  to_json u =
+  to_json_with _ u =
     E.object [
       ("id", to_json u.id),
       ("name", to_json u.name),
@@ -154,6 +177,22 @@ main () = {
   dbg (E.render (E.object []))
   dbg (E.render (E.object [("nested", E.object [("k", E.int 1)])]))
   dbg (E.render (E.array [E.int 1, E.string "two", E.bool True, E.null]))
+
+  dbg "--- Phase 4: derived ADT (externally tagged) ---"
+  dbg (E.serialize Admin)
+  dbg (E.serialize Editor)
+
+  dbg "--- Phase 4: Options-threading via rename_all: CamelCase ---"
+  let acct = Account {
+    user_info: Profile {
+      first_name: "Ada",
+      last_name: "Lovelace",
+      role: Admin,
+    },
+    account_id: 7,
+  }
+  let camel_opts = { default_options | rename_all: CamelCase }
+  dbg (E.serialize_with camel_opts acct)
 
   dbg "--- Phase 2: serialize via ToJson + round-trip ---"
   case J.parse parse_user user_json {

@@ -143,7 +143,61 @@ Once compiler-side Generic lands and is auto-derived for all types, users get `d
 
 Reference: [Generic Deriving guide](../../../../saga-website/app/content/guide/generic-deriving.md).
 
-No second helper trait is needed. Saga's Rep includes `Record`, `Adt`, and `Variant` wrappers in addition to the leaf/product/sum building blocks, so a single `ToJson` trait handles both "I'm a value" and "I'm contributing to an object" cases naturally — `Record` emits the `{}` and forwards inner; `Labeled` and `And` produce comma-separated `"key": value` fragments inside. (This is cleaner than GHC.Generics, which needs separate `GToJSON` classes for values vs. fields.)
+### Why four traits (the no-overlap pattern)
+
+For string-output deriving (à la [examples/99k](../../../../saga/examples/99k-generic-derived-defaults.saga)), a single `ToJson` trait works because every level just `<>`s string fragments together. For a real `Json` AST output, the building blocks need to know which *syntactic position* they're in: are we producing object fields, positional arguments, or a standalone value? Same Json shape can mean different things.
+
+The clean solution is the same one GHC.Generics uses: **multiple helper traits, one per syntactic position.** No overlapping instances, no runtime shape-sniffing, dispatch resolved at compile time by trait constraints.
+
+```
+pub trait ToJson a {                                # the user-facing trait
+  fun to_json_with : Options -> a -> Json
+  fun to_json      : a -> Json
+  to_json x = to_json_with default_options x
+}
+
+trait ToJsonFields a {                              # library-internal, not pub
+  fun to_fields : Options -> a -> List (String, Json)
+}
+
+trait ToJsonArgs a {                                # library-internal, not pub
+  fun to_args : Options -> a -> List Json
+}
+
+trait VariantPayload a {                            # library-internal, not pub
+  fun payload_json : Options -> a -> Json
+}
+```
+
+Building-block impls each implement only the trait matching their position. Some Rep types appear in multiple positions and therefore implement multiple traits — that's fine; no overlap because the traits are distinct.
+
+- `Leaf a where {a: ToJson}` → `ToJson` (passthrough — used when Leaf is inside Labeled in a record field)
+- `Leaf a where {a: ToJson}` → `ToJsonArgs` (produces `[to_json x]` — used inside And in a multi-arg variant)
+- `Leaf a where {a: ToJson}` → `VariantPayload` (unwraps the leaf — used as sole payload of a single-arg variant)
+- `Labeled a where {a: ToJson}` → `ToJsonFields` (produces `[(name, to_json x)]`)
+- `And l r where {l: ToJsonFields, r: ToJsonFields}` → `ToJsonFields` (concat fields)
+- `And l r where {l: ToJsonArgs, r: ToJsonArgs}` → `ToJsonArgs` (concat args)
+- `And l r where {l: ToJsonArgs, r: ToJsonArgs}` → `VariantPayload` (wraps `to_args` result in an array)
+- `Or l r where {l: ToJson, r: ToJson}` → `ToJson` (forwards to whichever branch is present)
+- `U1` → `VariantPayload` (returns `null`)
+- `Record a where {a: ToJsonFields}` → `ToJson` (wraps fields in object)
+- `Variant a where {a: VariantPayload}` → `ToJson` (emits `{name: payload}`)
+- `Adt a where {a: ToJson}` → `ToJson` (passthrough)
+
+Twelve impls total. Three on Leaf (one per trait it participates in), three on And, one each on the rest.
+
+### What this is not
+
+This is not a workaround for Saga's parser limitations. Saga doesn't accept `impl X for Variant U1` / `impl X for Variant (Leaf a)` / `impl X for Variant (And l r)` — but specializing on parameterized type shapes is what Haskell calls **overlapping instances**, and mature libraries deliberately avoid them. They have well-known problems: resolution ambiguity, fragile incremental compilation, confusing user error messages. aeson, GHC.Generics, and serde-derive all sidestep the problem the same way — multiple helper typeclasses with non-overlapping coverage. The four-trait pattern is the actual right answer for this kind of dispatch, not a hack.
+
+### Why not singleton-wrapping or role-method
+
+Two single-trait alternatives were considered:
+
+- **Singleton-wrapping:** `Leaf x` wraps in a singleton VArray; `And` dispatches by inspecting whether children are VObject or VArray. Works but allocates per leaf, encodes Rep-position info into Json's shape (overloading the type), and the invariant ("no mixed shapes in And") is convention-enforced.
+- **Role-method:** every `ToJson` impl carries a `role : a -> Role` method returning a tag (FieldFragment / PositionalValue / Standalone); `And` dispatches by examining roles. Works but adds a runtime branch per And, and the invariant is still convention-enforced.
+
+Both have the same correctness model: works in the happy path, silently produces wrong output on misuse. The four-trait approach makes misuse a *compile error* (a building-block impl mismatched with its expected trait constraint). That's the genuine win, and it's worth four small library-internal traits.
 
 There is no `deriving (Generic)` syntax. Generic is implied automatically when any user-defined derive is requested.
 
@@ -294,7 +348,7 @@ Decisions baked into `deriving (ToJson)` with default Options. These are sticky 
 
 ## Conflict rule
 
-If a type has both `deriving (ToJson)` and a hand-written `impl ToJson for Foo`, **the hand-written impl wins.** This is Saga's documented behavior (see the Generic Deriving guide). It's the convenience path — users can add `deriving (ToJson)` for the default case and override per-type by writing a manual impl, without removing the `deriving` clause. The tradeoff is that an unused `deriving` is silent rather than flagged; linters can catch this if needed.
+If a type has both `deriving (ToJson)` and a hand-written `impl ToJson for Foo`, **the compiler raises `duplicate impl`.** To override the default encoding, drop the `deriving (ToJson)` clause and keep only the manual impl. (Earlier drafts of this doc described silent override; that was a documentation mismatch with the compiler, resolved in favor of the hard error — silent precedence would let a derive sneak in under an existing manual impl with no signal.) If you want the derived shape as a starting point inside a manual impl, call `Json.derive_with opts x`.
 
 ## Dependencies on the compiler
 
