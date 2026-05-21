@@ -7,6 +7,7 @@ import SagaJson.Encode as E (
   serialize_with,
   Options,
   NameStyle,
+  TagFormat,
   default_options
 )
 
@@ -54,6 +55,19 @@ record Settings {
   nickname: Maybe String,
 } deriving (ToJson)
 
+# A single-arg variant whose payload is a record — exercises
+# InternallyTagged, which can only merge a tag into an object payload.
+record Payload {
+  x: Int,
+  y: Int,
+} deriving (ToJson)
+
+type Wrapper =
+  | WrapIt Payload
+  | NoOp
+  | Bare Int
+  deriving (ToJson)
+
 # Helper: build an Options value with a single field overridden from
 # defaults. The record-spread shorthand isn't (yet) supported in Saga, so
 # we spell out each field.
@@ -62,6 +76,9 @@ with_rename_all ns = { default_options | rename_all: ns }
 
 fun with_omit_nothing : Bool -> Options
 with_omit_nothing flag = { default_options | omit_nothing: flag }
+
+fun with_tag_format : TagFormat -> Options
+with_tag_format tf = { default_options | tag_format: tf }
 
 pub fun tests : Unit -> Unit needs {Testing}
 tests () = {
@@ -146,6 +163,87 @@ tests () = {
             (with_omit_nothing True)
             (Settings { name: "x", nickname: Just "xx" }))
           "{\"name\":\"x\",\"nickname\":\"xx\"}")
+    })
+
+    describe "tag_format: AdjacentlyTagged" (fun () -> {
+      test "unit variant emits both tag and (null) content" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.AdjacentlyTagged) NoOp)
+          "{\"tag\":\"NoOp\",\"content\":null}")
+
+      test "primitive payload sits under content_field" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.AdjacentlyTagged) (Bare 9))
+          "{\"tag\":\"Bare\",\"content\":9}")
+
+      test "record payload sits under content_field" (fun () -> {
+        let got = (serialize_with
+          (with_tag_format E.AdjacentlyTagged)
+          (WrapIt (Payload { x: 1, y: 2 })))
+        assert_eq got "{\"tag\":\"WrapIt\",\"content\":{\"x\":1,\"y\":2}}"
+      })
+
+      test "rename of tag/content fields via Options" (fun () -> {
+        let opts = { default_options |
+          tag_format: E.AdjacentlyTagged,
+          tag_field: "kind",
+          content_field: "data"
+        }
+        let got = serialize_with opts (Bare 9)
+        assert_eq got "{\"kind\":\"Bare\",\"data\":9}"
+      })
+    })
+
+    describe "tag_format: InternallyTagged" (fun () -> {
+      test "unit variant emits just the tag" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.InternallyTagged) NoOp)
+          "{\"tag\":\"NoOp\"}")
+
+      test "object payload merges tag in front" (fun () -> {
+        let got = (serialize_with
+          (with_tag_format E.InternallyTagged)
+          (WrapIt (Payload { x: 1, y: 2 })))
+        assert_eq got "{\"tag\":\"WrapIt\",\"x\":1,\"y\":2}"
+      })
+
+      test "primitive payload falls back to externally-tagged" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.InternallyTagged) (Bare 9))
+          "{\"Bare\":9}")
+
+      test "custom tag_field is honored on object merge" (fun () -> {
+        let opts = { default_options |
+          tag_format: E.InternallyTagged,
+          tag_field: "type"
+        }
+        let got = serialize_with opts (WrapIt (Payload { x: 1, y: 2 }))
+        assert_eq got "{\"type\":\"WrapIt\",\"x\":1,\"y\":2}"
+      })
+    })
+
+    describe "tag_format: Untagged" (fun () -> {
+      test "unit variant emits null" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.Untagged) NoOp)
+          "null")
+
+      test "primitive variant emits the bare value" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.Untagged) (Bare 9))
+          "9")
+
+      test "record-payload variant emits the bare object" (fun () -> {
+        let got = (serialize_with
+          (with_tag_format E.Untagged)
+          (WrapIt (Payload { x: 1, y: 2 })))
+        assert_eq got "{\"x\":1,\"y\":2}"
+      })
+
+      test "multi-arg variant emits the bare array" (fun () ->
+        assert_eq
+          (serialize_with (with_tag_format E.Untagged) (Rect 3 4))
+          "[3,4]")
     })
 
     describe "byte-for-byte match with hand-written" (fun () -> {

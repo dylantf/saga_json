@@ -116,9 +116,18 @@ pub type NameStyle =
   | SnakeCase
   | ScreamingSnakeCase
 
-#@ How sum-type variants are tagged in the emitted JSON. Only
-#@ `ExternallyTagged` is implemented in Phase 4; the others are placeholders.
-# TODO Phase 4.x: implement AdjacentlyTagged / InternallyTagged / Untagged.
+#@ How sum-type variants are tagged in the emitted JSON.
+#@
+#@ - `ExternallyTagged` (default): `{"Variant": payload}`.
+#@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
+#@    both fields always emitted, including for unit (U1) variants where
+#@    `content_field` carries `null`.
+#@ - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
+#@    Only well-defined when the payload renders to a JSON object (single
+#@    record-valued variants) or `null` (unit variants). For primitive /
+#@    array payloads the encoder falls back to `ExternallyTagged` — same
+#@    restriction as serde.
+#@ - `Untagged`: emit the payload directly; variant identity is lost.
 pub type TagFormat =
   | ExternallyTagged
   | AdjacentlyTagged
@@ -270,8 +279,26 @@ impl ToJson for Record a where {a: ToJsonFields} {
 }
 
 impl ToJson for Variant a where {a: VariantPayload} {
-  to_json_with opts (Variant name payload) =
-    object [(name, payload_json opts payload)]
+  to_json_with opts (Variant name payload) = {
+    let p = payload_json opts payload
+    case opts.tag_format {
+      ExternallyTagged -> object [(name, p)]
+      AdjacentlyTagged ->
+        object [(opts.tag_field, string name), (opts.content_field, p)]
+      Untagged -> p
+      InternallyTagged -> tag_internally opts.tag_field name p
+    }
+  }
+}
+
+# Merge the tag field into a payload's object body. `null` payloads emit
+# just the tag; primitive / array payloads (which can't carry an extra
+# key) fall back to the externally-tagged form.
+fun tag_internally : String -> String -> Json -> Json
+tag_internally tag_field name payload = case to_value payload {
+  VNull -> object [(tag_field, string name)]
+  VObject pairs -> from_value (VObject ((tag_field, VString name) :: pairs))
+  _ -> object [(name, payload)]
 }
 
 impl ToJson for Adt a where {a: ToJson} {
