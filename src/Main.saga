@@ -4,7 +4,7 @@ import Std.Fail (Fail)
 import Std.IO (console)
 import SagaJson as J (Json)
 import SagaJson.Decode as D
-import SagaJson.Encode as E
+import SagaJson.Encode as E (ToJson)
 
 val user_json = """
   {
@@ -93,39 +93,40 @@ parse_user json = User {
   tags: D.at "tags" (D.list_of D.string) json,
 }
 
-# --- Phase 1: encode example ---
+# --- Phase 2: ToJson hand-written impls ---
 #
-# Hand-build a Json value with the Encode constructors, render it, and
-# round-trip it back through the decoder.
+# Each record gets a manual `impl ToJson`. Field types reach the right impl
+# via trait resolution: `to_json u.id` dispatches to `ToJson for Int`,
+# `to_json u.roles` dispatches to `ToJson for List a where {a: ToJson}`
+# which in turn calls `ToJson for String`, etc.
 
-fun encode_coords : Coords -> Json
-encode_coords c = E.object [
-  ("lat", E.float c.lat),
-  ("lng", E.float c.lng),
-]
+impl E.ToJson for Coords {
+  to_json c = E.object [("lat", to_json c.lat), ("lng", to_json c.lng)]
+}
 
-fun encode_address : Address -> Json
-encode_address a = E.object [
-  ("street", E.string a.street),
-  ("city", E.string a.city),
-  ("zip", E.string a.zip),
-  ("coords", encode_coords a.coords),
-]
+impl E.ToJson for Address {
+  to_json a =
+    E.object [
+      ("street", to_json a.street),
+      ("city", to_json a.city),
+      ("zip", to_json a.zip),
+      ("coords", to_json a.coords),
+    ]
+}
 
-fun encode_user : User -> Json
-encode_user u = E.object [
-  ("id", E.int u.id),
-  ("name", E.string u.name),
-  ("active", E.bool u.active),
-  ("manager", case u.manager {
-    Nothing -> E.null
-    Just s -> E.string s
-  }),
-  ("balance", E.float u.balance),
-  ("roles", E.array (List.map E.string u.roles)),
-  ("address", encode_address u.address),
-  ("tags", E.array (List.map E.string u.tags)),
-]
+impl E.ToJson for User {
+  to_json u =
+    E.object [
+      ("id", to_json u.id),
+      ("name", to_json u.name),
+      ("active", to_json u.active),
+      ("manager", to_json u.manager),
+      ("balance", to_json u.balance),
+      ("roles", to_json u.roles),
+      ("address", to_json u.address),
+      ("tags", to_json u.tags),
+    ]
+}
 
 main () = {
   dbg "--- happy path ---"
@@ -154,15 +155,17 @@ main () = {
   dbg (E.render (E.object [("nested", E.object [("k", E.int 1)])]))
   dbg (E.render (E.array [E.int 1, E.string "two", E.bool True, E.null]))
 
-  dbg "--- Phase 1: round-trip user ---"
+  dbg "--- Phase 2: serialize via ToJson + round-trip ---"
   case J.parse parse_user user_json {
     Err e -> dbg e
     Ok original -> {
-      let rendered = E.render (encode_user original)
+      let rendered = E.serialize original
       dbg rendered
       case J.parse parse_user rendered {
         Err e -> dbg e
-        Ok reparsed -> dbg (if reparsed == original then "round-trip OK" else "round-trip MISMATCH")
+        Ok reparsed ->
+          dbg (if reparsed == original then "round-trip OK"
+          else "round-trip MISMATCH")
       }
     }
   }

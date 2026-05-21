@@ -7,10 +7,11 @@ module SagaJson.Encode
 
 import Std.Base (Show, Debug)
 import Std.BitString as BS
+import Std.Fail (Fail)
 import Std.Int
 import Std.List
 import Std.String
-import SagaJson (Json, from_value, to_value)
+import SagaJson (Json, Error, from_value, to_value)
 import SagaJson.Parser (Value)
 
 # --- Primitive constructors ---
@@ -99,4 +100,174 @@ fun unicode_escape : Int -> BitString
 unicode_escape c = {
   let padded = String.pad_left 2 "0" (Int.to_hex c)
   BS.from_string $"\\u00{padded}"
+}
+
+# --- ToJson trait ---
+
+#@ Types that can be encoded as JSON. Hand-write `to_json` for your own
+#@ records and ADTs by composing the primitive constructors. Once Generic
+#@ deriving lands, `deriving (ToJson)` will synthesize this for you.
+pub trait ToJson a {
+  fun to_json : a -> Json
+}
+
+impl ToJson for String {
+  to_json s = string s
+}
+
+impl ToJson for Int {
+  to_json n = int n
+}
+
+impl ToJson for Float {
+  to_json f = float f
+}
+
+impl ToJson for Bool {
+  to_json b = bool b
+}
+
+impl ToJson for List a where {a: ToJson} {
+  to_json xs = array (List.map to_json xs)
+}
+
+impl ToJson for Maybe a where {a: ToJson} {
+  to_json m = case m {
+    Nothing -> null
+    Just x -> to_json x
+  }
+}
+
+#@ Encode a value to a compact JSON string. Equivalent to
+#@ `render (to_json x)`.
+pub fun serialize : a -> String where {a: ToJson}
+serialize x = render (to_json x)
+
+# --- Post-process combinators ---
+#
+# Single-level transformations on a Json object. Compose with `|>`; nest by
+# passing a lambda that operates on the inner Json. All five operate on
+# VObject only — non-object input fails with InvalidShape.
+#
+# update_field / rename_field / remove_field fail loudly if the key is
+# missing. insert_field fails if the key already exists (use update_field
+# to overwrite). Missing-key failure catches the common bug where a
+# post-process refers to a renamed field; silent no-op would hide it.
+
+fun classify : Value -> String
+classify v = case v {
+  VNull -> "null"
+  VBool _ -> "Bool"
+  VInt _ -> "Int"
+  VFloat _ -> "Float"
+  VString _ -> "String"
+  VArray _ -> "Array"
+  VObject _ -> "Object"
+}
+
+fun expect_object : Json -> List (String, Value) needs {Fail Error}
+expect_object j = case to_value j {
+  VObject pairs -> pairs
+  v -> fail! (InvalidShape "Object" (classify v) [])
+}
+
+fun has_key : String -> List (String, Value) -> Bool
+has_key _ [] = False
+has_key k ((k2, _) :: rest) = if k == k2 then True else has_key k rest
+
+fun do_update : String -> (Json -> Json needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+  needs {Fail Error, ..e}
+do_update key f pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == key then (k, to_value (f (from_value v))) :: do_update key f rest
+    else (k, v) :: do_update key f rest
+}
+
+fun do_rename : String -> String -> List (String, Value) -> List (String, Value)
+do_rename old new pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == old then (new, v) :: do_rename old new rest
+    else (k, v) :: do_rename old new rest
+}
+
+fun do_remove : String -> List (String, Value) -> List (String, Value)
+do_remove key pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == key then do_remove key rest
+    else (k, v) :: do_remove key rest
+}
+
+fun do_map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+  needs {Fail Error, ..e}
+do_map_object f pairs = case pairs {
+  [] -> []
+  (k, v) :: rest -> {
+    let (new_k, new_j) = f (k, from_value v)
+    (new_k, to_value new_j) :: do_map_object f rest
+  }
+}
+
+#@ Apply `f` to the value at `key`. Preserves key order. Fails with
+#@ InvalidShape if the key is missing or the input is not an object.
+#@ The callback may itself raise effects (typically used to nest other
+#@ post-process combinators on the inner Json).
+pub fun update_field : String -> (Json -> Json needs {Fail Error, ..e}) -> Json -> Json
+  needs {Fail Error, ..e}
+update_field key f j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_update key f pairs))
+  else fail! (InvalidShape $"field '{key}'" "missing" [key])
+}
+
+#@ Rename `old` to `new`. Preserves position and value. Fails if `old` is
+#@ missing or the input is not an object.
+pub fun rename_field : String -> String -> Json -> Json needs {Fail Error}
+rename_field old new j = {
+  let pairs = expect_object j
+  if has_key old pairs then from_value (VObject (do_rename old new pairs))
+  else fail! (InvalidShape $"field '{old}'" "missing" [old])
+}
+
+#@ Remove `key`. Fails if `key` is missing or the input is not an object.
+pub fun remove_field : String -> Json -> Json needs {Fail Error}
+remove_field key j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_remove key pairs))
+  else fail! (InvalidShape $"field '{key}'" "missing" [key])
+}
+
+#@ Upsert: replace the value at `key` if it exists (preserving position),
+#@ otherwise append `(key, value)`. The unconditional-write variant; use
+#@ `update_field` or `insert_field` if you want missing/existing to fail.
+pub fun set_field : String -> Json -> Json -> Json needs {Fail Error}
+set_field key value j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_update key (fun _ ->
+    value) pairs))
+  else from_value (VObject (List.append pairs [(key, to_value value)]))
+}
+
+#@ Append `(key, value)`. Fails if `key` already exists (use `update_field`
+#@ to overwrite, or `set_field` to upsert) or the input is not an object.
+pub fun insert_field : String -> Json -> Json -> Json needs {Fail Error}
+insert_field key value j = {
+  let pairs = expect_object j
+  if has_key key pairs then fail! (InvalidShape $"absent field '{key}'" "present" [
+    key,
+  ])
+  else from_value (VObject (List.append pairs [(key, to_value value)]))
+}
+
+#@ Apply `f` to every `(key, value)` pair, replacing both. Useful for
+#@ uniform key transformations (e.g. camelCasing every key of a
+#@ dynamic-keyed `Map String _`). Preserves order. The callback may
+#@ itself raise effects.
+pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> Json -> Json
+  needs {Fail Error, ..e}
+map_object f j = {
+  let pairs = expect_object j
+  from_value (VObject (do_map_object f pairs))
 }
