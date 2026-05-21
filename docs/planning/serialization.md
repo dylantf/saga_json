@@ -6,6 +6,28 @@ Status: planning. Depends on Generic landing in the compiler (see `saga/examples
 
 Add encoding to `saga_json`. Currently the library only decodes (`Json -> a needs {Fail Error}`). We need the symmetric direction: `a -> Json`, plus rendering `Json -> String`.
 
+## Module layout
+
+The library splits into three modules to keep encoder/decoder namespaces from colliding (both have a `string`, an `int`, etc.):
+
+```
+SagaJson           # shared: Json opaque type, Error, parse_string
+SagaJson.Encode    # encoder primitives, render, ToJson trait, Options, serialize, derive_with
+SagaJson.Decode    # decoder primitives, combinators, FromJson trait, deserialize, refine
+```
+
+Users typically alias both:
+
+```
+import SagaJson as J (Json)
+import SagaJson.Encode as E
+import SagaJson.Decode as D
+```
+
+`Encode` and `Decode` both import `SagaJson` (for `Json`/`Error`) and `SagaJson.Parser` (for `Value`); neither imports the other. No circular import risk.
+
+This layout matches Elm (`Json.Encode` / `Json.Decode`), aeson (`ToJSON` / `FromJSON`), and serde (`Serialize` / `Deserialize`). Convergent design.
+
 ## Library-only work
 
 No language features are blocked. The library needs:
@@ -17,12 +39,14 @@ Thin wrappers over the existing `Value` constructors, all returning `Json`:
 ```
 pub fun string : String -> Json
 pub fun int    : Int -> Json
-pub fun float  : Float -> Json
+pub fun float  : Float -> Json    # NaN/Infinity coerced to null
 pub fun bool   : Bool -> Json
 pub fun null   : Json
 pub fun array  : List Json -> Json
 pub fun object : List (String, Json) -> Json
 ```
+
+`float` coerces non-finite values to `null` at construction time. Matches JS `JSON.stringify`, Rust serde, Haskell aeson — JSON doesn't have NaN or Infinity, so the choice is "produce invalid JSON," "fail at encode time," or "silently coerce to null." Industry convergent behavior is the third. This keeps `render` a pure `Json -> String` (no effect row) and preserves the invariant that anything in the `Json` AST renders as valid JSON.
 
 ### Renderer
 
@@ -37,23 +61,97 @@ pub fun object : List (String, Json) -> Json
 
 ```
 trait ToJson a {
-  fun to_json : a -> Json
+  fun to_json_with : Options -> a -> Json
+  fun to_json      : a -> Json
+  to_json x = to_json_with default_options x
 }
 ```
 
+This is the two-method pattern from [examples/99k-generic-derived-defaults.saga](../../../../saga/examples/99k-generic-derived-defaults.saga). The trait gives library code an Options-threaded routed method (`to_json_with`) and gives users a convenience wrapper (`to_json`) with a default body that forwards to `to_json_with default_options`. Hand-written impls only need to provide `to_json_with`; the default body for `to_json` is inherited.
+
+`to_json_with` is the real method — it gets Options threaded through and is what `deriving` synthesizes against and what the building-block impls call recursively. Users almost never call `to_json_with` directly; they call `to_json p` for the default shape or `Json.serialize_with opts p` for a tweaked shape.
+
+Discipline (one rule): **inside any building-block impl, recurse via `to_json_with o`, not bare `to_json`.** Bare `to_json` drops options on the floor. This is mechanical — there are 8 building-block impls, all touched once. A regression test that encodes a deeply nested value with non-default options and asserts the leaf reflects them will catch any violation.
+
 Encoders are plain functions, no effect row. Encoding cannot fail in any honest way.
 
-Library impls: `String`, `Int`, `Float`, `Bool`, `List a where ToJson a`, `Maybe a where ToJson a`, plus the Generic Rep building blocks (`U1`, `Leaf`, `Labeled`, `And`, `Or`).
+Library impls: `String`, `Int`, `Float`, `Bool`, `List a where ToJson a`, `Maybe a where ToJson a`, plus the Generic Rep building blocks (`U1`, `Leaf`, `Labeled`, `Variant`, `And`, `Or`, `Record`, `Adt`).
+
+Note: Phases 1–3 ship with just `to_json : a -> Json` (no Options anywhere). Phase 4 grows the trait to the two-method shape, adds `Options` + `default_options`, and updates all impls. Cleaner phasing than shipping the full shape with a stub Options earlier.
+
+### The three-layer API
+
+User-facing functions split across three layers, each addressing a real boundary:
+
+```
+# Layer 1: typed value <-> Json AST (trait methods)
+fun to_json        : a -> Json                              where {a: ToJson}    # default opts
+fun to_json_with   : Options -> a -> Json                   where {a: ToJson}    # custom opts
+fun from_json      : Json -> Result a Error                 where {a: FromJson}  # default opts
+fun from_json_with : Options -> Json -> Result a Error      where {a: FromJson}  # custom opts
+
+# Layer 2: Json AST <-> String (pure structural conversion, no Options)
+pub fun render       : Json -> String
+pub fun parse_string : String -> Result Json Error   # already exists
+
+# Layer 3: typed value <-> String (the everyday API)
+pub fun serialize      : a -> String                              where {a: ToJson}
+pub fun serialize_with : Options -> a -> String                   where {a: ToJson}
+pub fun deserialize      : String -> Result a Error               where {a: FromJson}
+pub fun deserialize_with : Options -> String -> Result a Error    where {a: FromJson}
+```
+
+`serialize` and `deserialize` use `default_options` via the trait's default `to_json` / `from_json` methods. The `_with` variants take Options explicitly.
+
+Usage by user type:
+
+- **Day-1 user:** `Json.serialize user` and `Json.deserialize input_string`. Sees only layer 3.
+- **Whole-record tweaks:** `Json.serialize_with my_opts user`.
+- **Targeted shape edits:** drops to layers 1+2 — `to_json_with opts u |> rename_field ... |> render`.
+- **Library author writing impls:** implements `to_json_with` (layer 1). Inherits `to_json` from the trait default. Never touches the other layers.
+- **`deriving` machinery:** synthesizes against layer 1's `to_json_with`.
+
+Three is the convergent number across Elm, serde, and aeson — the three boundaries (typed ↔ AST, AST ↔ bytes, typed ↔ bytes) are real and worth naming separately.
+
+### `Json.derive_with` — the derive-then-tweak escape hatch
+
+For the case where a user writes a manual `impl ToJson for User` *and* wants to start from the Generic-derived encoding (then post-process), there has to be a way to invoke the derived encoding from inside the manual impl. The trait dispatch can't — manual wins and shadows the derived.
+
+The library provides a thin helper:
+
+```
+pub fun derive_with : Options -> a -> Json where {a: Generic a r, ToJson r}
+derive_with opts x = to_json_with opts (to x)
+```
+
+Naming mirrors `to_json_with` — `_with` consistently signals "this is the Options-taking variant." Call site:
+
+```
+impl ToJson for User {
+  to_json_with opts u = Json.derive_with opts u
+    |> J.rename_field "id" "userId"
+}
+```
+
+Reads as "to_json with opts: derive with opts, then rename." This is the only path for "derive defaults then tweak per field" without going fully hand-built.
+
+(Symmetric helper for FromJson is TBD in Phase 5 — likely `Json.derive_from_with` or just overloading `derive_with` by direction.)
 
 ## Generic & deriving
 
 Once compiler-side Generic lands and is auto-derived for all types, users get `deriving (ToJson)` and a delegating impl is synthesized. The library provides ToJson impls for the Rep building blocks; the compiler-synthesized delegating impl bridges user types to those.
 
-A second helper trait `ToJsonFields` is likely needed for the inner `And`-tree of records (a single `Labeled` produces a `(String, Json)` pair, not a complete `Json` — only `And` at the top wraps into `VObject`). GHC.Generics splits the same way (`GToJSON` for values vs. fields).
+Reference: [Generic Deriving guide](../../../../saga-website/app/content/guide/generic-deriving.md).
+
+No second helper trait is needed. Saga's Rep includes `Record`, `Adt`, and `Variant` wrappers in addition to the leaf/product/sum building blocks, so a single `ToJson` trait handles both "I'm a value" and "I'm contributing to an object" cases naturally — `Record` emits the `{}` and forwards inner; `Labeled` and `And` produce comma-separated `"key": value` fragments inside. (This is cleaner than GHC.Generics, which needs separate `GToJSON` classes for values vs. fields.)
+
+There is no `deriving (Generic)` syntax. Generic is implied automatically when any user-defined derive is requested.
+
+Saga also supports deriving traits whose methods mix to- and from- directions in one trait (e.g. a `JsonCodec` with both `encode : a -> Json` and `decode : Json -> Result a Error`). We'll stick with separate `ToJson` and `FromJson` traits per convention, but the option exists.
 
 ## The user-facing ladder
 
-There are **two tiers**. Inside the manual tier, `generic_to_json` is one helper among others.
+There are **two tiers**. Inside the manual tier, `to_json` itself (the trait method) is what users compose with — there's no separate `generic_to_json` helper.
 
 ### Tier 1: Derive
 
@@ -67,19 +165,19 @@ Compiler synthesizes the impl using the canonical defaults (see below). Zero cer
 
 ```
 impl ToJson for User {
-  to_json u = <anything : Json>
+  to_json_with opts u = <anything : Json>
 }
 ```
 
 The body is a spectrum:
 
-- `generic_to_json default_options u` — equivalent to Tier 1
-- `generic_to_json (Options { rename_all: CamelCase }) u` — derived shape with uniform tweaks
-- `generic_to_json options u |> <post-process combinators>` — derived shape with targeted shape edits
+- `Json.derive_with opts u` — equivalent to Tier 1 (the derived encoding, via Generic)
+- `Json.derive_with (Options { rename_all: CamelCase, ..opts }) u` — derived shape with uniform tweaks
+- `Json.derive_with opts u |> <post-process combinators>` — derived shape with targeted shape edits
 - `J.object [("name", J.string u.name), ...]` — hand-built from scratch
 - Any mix
 
-Tier 2 is one tier with a spectrum, not separate options.
+Tier 2 is one tier with a spectrum, not separate options. `Json.derive_with` is the bridge between manual impls and Generic-derived encoding (see the section above on the helper).
 
 ### Post-process combinators
 
@@ -196,7 +294,7 @@ Decisions baked into `deriving (ToJson)` with default Options. These are sticky 
 
 ## Conflict rule
 
-If a type has both `deriving (ToJson)` and a hand-written `impl ToJson for Foo`, **compile error pointing at both sites**. Don't silently pick a winner. Matches Rust's behavior with `#[derive(Serialize)]`.
+If a type has both `deriving (ToJson)` and a hand-written `impl ToJson for Foo`, **the hand-written impl wins.** This is Saga's documented behavior (see the Generic Deriving guide). It's the convenience path — users can add `deriving (ToJson)` for the default case and override per-type by writing a manual impl, without removing the `deriving` clause. The tradeoff is that an unused `deriving` is silent rather than flagged; linters can catch this if needed.
 
 ## Dependencies on the compiler
 

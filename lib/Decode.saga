@@ -1,0 +1,116 @@
+#@ JSON decoders.
+#@
+#@ A decoder is a function `Json -> a needs {Fail Error}`. Compose them by
+#@ ordinary function call; failures short-circuit through the Fail handler.
+#@ Use `SagaJson.parse` or `SagaJson.run` to discharge the effect.
+module SagaJson.Decode
+
+import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
+import Std.Fail (Fail)
+import Std.Int
+import Std.List
+import SagaJson (Json, Error, to_value)
+import SagaJson.Parser (Value)
+
+# --- Helpers ---
+
+fun classify : Value -> String
+classify v = case v {
+  VNull -> "null"
+  VBool _ -> "Bool"
+  VInt _ -> "Int"
+  VFloat _ -> "Float"
+  VString _ -> "String"
+  VArray _ -> "Array"
+  VObject _ -> "Object"
+}
+
+fun shape_err : String -> Json -> a needs {Fail Error}
+shape_err expected j = fail! (InvalidShape expected (classify (to_value j)) [])
+
+fun prefix_path : String -> Error -> Error
+prefix_path seg e = case e {
+  InvalidShape exp found path -> InvalidShape exp found (seg :: path)
+  other -> other
+}
+
+# --- Primitive decoders ---
+
+#@ Decode a JSON string value.
+pub fun string : Json -> String needs {Fail Error}
+string j = case to_value j {
+  VString s -> s
+  _ -> shape_err "String" j
+}
+
+#@ Decode a JSON integer value.
+pub fun int : Json -> Int needs {Fail Error}
+int j = case to_value j {
+  VInt n -> n
+  _ -> fail! (InvalidShape "Int" (classify (to_value j)) [])
+}
+
+#@ Decode a JSON float value. Accepts integers as floats.
+pub fun float : Json -> Float needs {Fail Error}
+float j = case to_value j {
+  VFloat f -> f
+  VInt n -> Int.to_float n
+  _ -> shape_err "Float" j
+}
+
+#@ Decode a JSON boolean value.
+pub fun bool : Json -> Bool needs {Fail Error}
+bool j = case to_value j {
+  VBool b -> b
+  _ -> shape_err "Bool" j
+}
+
+# --- Navigation ---
+
+fun lookup : String -> List (String, Value) -> Maybe Value
+lookup _ [] = Nothing
+lookup k ((k2, v) :: rest) = if k == k2 then Just v else lookup k rest
+
+#@ Navigate to a named field in a JSON object.
+pub fun field : String -> Json -> Json needs {Fail Error}
+field name j = case to_value j {
+  VObject pairs -> case lookup name pairs {
+    Just v -> SagaJson.from_value v
+    Nothing -> fail! (InvalidShape $"field '{name}'" "missing" [name])
+  }
+  _ -> fail! (InvalidShape $"Object with field '{name}'" (classify (to_value j)) [])
+}
+
+#@ Navigate to a named field and apply `decoder` to it. Prefixes the
+#@ field name onto the path of any error raised inside `decoder`.
+pub fun at : String -> (Json -> a needs {Fail Error, ..e}) -> Json -> a needs {Fail Error, ..e}
+at name decoder j = decoder (field name j) with {
+  fail e = fail! (prefix_path name e)
+}
+
+# --- Combinators ---
+
+fun map_each : (Json -> a needs {Fail Error, ..e}) -> List Value -> List a needs {Fail Error, ..e}
+map_each f xs = case xs {
+  [] -> []
+  h :: t -> {
+    let v = f (SagaJson.from_value h)
+    let rest = map_each f t
+    v :: rest
+  }
+}
+
+#@ Decode a JSON array, applying `decoder` to each element.
+pub fun list_of : (Json -> a needs {Fail Error, ..e}) -> Json -> List a needs {Fail Error, ..e}
+list_of decoder j = case to_value j {
+  VArray items -> map_each decoder items
+  _ -> shape_err "Array" j
+}
+
+#@ Decode a JSON value that may be null. Returns Nothing for null,
+#@ Just (decoder value) otherwise.
+pub fun nullable : (Json -> a needs {Fail Error, ..e}) -> Json -> Maybe a needs {Fail Error, ..e}
+nullable decoder j = case to_value j {
+  VNull -> Nothing
+  _ -> Just (decoder j)
+}

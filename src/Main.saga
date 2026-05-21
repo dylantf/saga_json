@@ -3,6 +3,8 @@ module Main
 import Std.Fail (Fail)
 import Std.IO (console)
 import SagaJson as J (Json)
+import SagaJson.Decode as D
+import SagaJson.Encode as E
 
 val user_json = """
   {
@@ -45,14 +47,14 @@ val nested_bad = """
 record Coords {
   lat: Float,
   lng: Float,
-} deriving (Debug)
+} deriving (Debug, Eq)
 
 record Address {
   street: String,
   city: String,
   zip: String,
   coords: Coords,
-} deriving (Debug)
+} deriving (Debug, Eq)
 
 record User {
   id: Int,
@@ -63,33 +65,67 @@ record User {
   roles: List String,
   address: Address,
   tags: List String,
-} deriving (Debug)
+} deriving (Debug, Eq)
 
 fun parse_coords : Json -> Coords needs {Fail J.Error}
 parse_coords json = Coords {
-  lat: J.at "lat" J.float json,
-  lng: J.at "lng" J.float json,
+  lat: D.at "lat" D.float json,
+  lng: D.at "lng" D.float json,
 }
 
 fun parse_address : Json -> Address needs {Fail J.Error}
 parse_address json = Address {
-  street: J.at "street" J.string json,
-  city: J.at "city" J.string json,
-  zip: J.at "zip" J.string json,
-  coords: J.at "coords" parse_coords json,
+  street: D.at "street" D.string json,
+  city: D.at "city" D.string json,
+  zip: D.at "zip" D.string json,
+  coords: D.at "coords" parse_coords json,
 }
 
 fun parse_user : Json -> User needs {Fail J.Error}
 parse_user json = User {
-  id: J.at "id" J.int json,
-  name: J.at "name" J.string json,
-  active: J.at "active" J.bool json,
-  manager: J.at "manager" (J.nullable J.string) json,
-  balance: J.at "balance" J.float json,
-  roles: J.at "roles" (J.list_of J.string) json,
-  address: J.at "address" parse_address json,
-  tags: J.at "tags" (J.list_of J.string) json,
+  id: D.at "id" D.int json,
+  name: D.at "name" D.string json,
+  active: D.at "active" D.bool json,
+  manager: D.at "manager" (D.nullable D.string) json,
+  balance: D.at "balance" D.float json,
+  roles: D.at "roles" (D.list_of D.string) json,
+  address: D.at "address" parse_address json,
+  tags: D.at "tags" (D.list_of D.string) json,
 }
+
+# --- Phase 1: encode example ---
+#
+# Hand-build a Json value with the Encode constructors, render it, and
+# round-trip it back through the decoder.
+
+fun encode_coords : Coords -> Json
+encode_coords c = E.object [
+  ("lat", E.float c.lat),
+  ("lng", E.float c.lng),
+]
+
+fun encode_address : Address -> Json
+encode_address a = E.object [
+  ("street", E.string a.street),
+  ("city", E.string a.city),
+  ("zip", E.string a.zip),
+  ("coords", encode_coords a.coords),
+]
+
+fun encode_user : User -> Json
+encode_user u = E.object [
+  ("id", E.int u.id),
+  ("name", E.string u.name),
+  ("active", E.bool u.active),
+  ("manager", case u.manager {
+    Nothing -> E.null
+    Just s -> E.string s
+  }),
+  ("balance", E.float u.balance),
+  ("roles", E.array (List.map E.string u.roles)),
+  ("address", encode_address u.address),
+  ("tags", E.array (List.map E.string u.tags)),
+]
 
 main () = {
   dbg "--- happy path ---"
@@ -107,4 +143,27 @@ main () = {
   dbg "--- nested bad shape ---"
   J.parse parse_user nested_bad
   |> dbg
+
+  dbg "--- Phase 1: encode edge cases ---"
+  dbg (E.render (E.string ""))
+  dbg (E.render (E.string "a\"b"))
+  dbg (E.render (E.string "a\\b"))
+  dbg (E.render (E.string "a\nb"))
+  dbg (E.render (E.array []))
+  dbg (E.render (E.object []))
+  dbg (E.render (E.object [("nested", E.object [("k", E.int 1)])]))
+  dbg (E.render (E.array [E.int 1, E.string "two", E.bool True, E.null]))
+
+  dbg "--- Phase 1: round-trip user ---"
+  case J.parse parse_user user_json {
+    Err e -> dbg e
+    Ok original -> {
+      let rendered = E.render (encode_user original)
+      dbg rendered
+      case J.parse parse_user rendered {
+        Err e -> dbg e
+        Ok reparsed -> dbg (if reparsed == original then "round-trip OK" else "round-trip MISMATCH")
+      }
+    }
+  }
 }

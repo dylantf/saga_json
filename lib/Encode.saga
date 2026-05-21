@@ -1,0 +1,103 @@
+#@ JSON encoders and rendering.
+#@
+#@ Construct `Json` values with the primitive functions (`string`, `int`,
+#@ `array`, `object`, ...). Use `render` to serialize a `Json` value to
+#@ a compact JSON string.
+module SagaJson.Encode
+
+import Std.Base (Show, Debug)
+import Std.BitString as BS
+import Std.Int
+import Std.List
+import Std.String
+import SagaJson (Json, from_value, to_value)
+import SagaJson.Parser (Value)
+
+# --- Primitive constructors ---
+
+#@ Encode a Saga `String` as a JSON string value.
+pub fun string : String -> Json
+string s = from_value (VString s)
+
+#@ Encode an `Int` as a JSON number.
+pub fun int : Int -> Json
+int n = from_value (VInt n)
+
+#@ Encode a `Float` as a JSON number. Erlang has no NaN/Infinity; any
+#@ float Saga can hold renders as a valid JSON number.
+pub fun float : Float -> Json
+float f = from_value (VFloat f)
+
+#@ Encode a `Bool` as JSON `true` / `false`.
+pub fun bool : Bool -> Json
+bool b = from_value (VBool b)
+
+#@ The JSON `null` value.
+pub val null = from_value VNull
+
+#@ Encode a list of `Json` values as a JSON array.
+pub fun array : List Json -> Json
+array items = from_value (VArray (List.map to_value items))
+
+#@ Encode a list of (key, value) pairs as a JSON object. Key order is
+#@ preserved.
+pub fun object : List (String, Json) -> Json
+object pairs = from_value (VObject (List.map pair_to_value pairs))
+
+fun pair_to_value : (String, Json) -> (String, Value)
+pair_to_value (k, v) = (k, to_value v)
+
+# --- Rendering ---
+
+#@ Render a `Json` value as a compact JSON string (no whitespace).
+#@ Output round-trips through `SagaJson.parse_string`.
+pub fun render : Json -> String
+render j = render_value (to_value j)
+
+fun render_value : Value -> String
+render_value v = case v {
+  VNull -> "null"
+  VBool True -> "true"
+  VBool False -> "false"
+  VInt n -> show n
+  VFloat f -> show f
+  VString s -> render_string s
+  VArray items -> "[" <> String.join "," (List.map render_value items) <> "]"
+  VObject pairs -> "{" <> String.join "," (List.map render_pair pairs) <> "}"
+}
+
+fun render_pair : (String, Value) -> String
+render_pair (k, v) = render_string k <> ":" <> render_value v
+
+fun render_string : String -> String
+render_string s = {
+  let escaped = escape_loop (BS.from_string s) <<>>
+  case BS.to_string escaped {
+    Ok r -> $"\"{r}\""
+    Err _ -> $"\"{s}\""
+  }
+}
+
+# Inverse of Parser.escape_byte. Walks input bytes; backslash-escapes the
+# six JSON specials (`"`, `\`, `\b`, `\f`, `\n`, `\r`, `\t`), `\u00XX`-escapes
+# remaining sub-0x20 bytes, and passes all other bytes through (including
+# high-bit UTF-8 continuations).
+fun escape_loop : BitString -> BitString -> BitString
+escape_loop bs acc = case bs {
+  <<>> -> acc
+  <<34, rest/binary>> -> escape_loop rest (acc <> <<92, 34>>)
+  <<92, rest/binary>> -> escape_loop rest (acc <> <<92, 92>>)
+  <<8, rest/binary>> -> escape_loop rest (acc <> <<92, 98>>)
+  <<9, rest/binary>> -> escape_loop rest (acc <> <<92, 116>>)
+  <<10, rest/binary>> -> escape_loop rest (acc <> <<92, 110>>)
+  <<12, rest/binary>> -> escape_loop rest (acc <> <<92, 102>>)
+  <<13, rest/binary>> -> escape_loop rest (acc <> <<92, 114>>)
+  <<c:8, rest/binary>> when c < 32 -> escape_loop rest (acc <> unicode_escape c)
+  <<c:8, rest/binary>> -> escape_loop rest (acc <> <<c>>)
+}
+
+fun unicode_escape : Int -> BitString
+unicode_escape c = {
+  let padded = String.pad_left 2 "0" (Int.to_hex c)
+  BS.from_string $"\\u00{padded}"
+}
