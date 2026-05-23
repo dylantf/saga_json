@@ -1,6 +1,6 @@
 # Serialization — Phased Implementation Plan
 
-Companion to [../serialization.md](../serialization.md). That doc explains *what* and *why*; this doc is *how* and *when*. Agents picking up a phase should read both.
+Companion to [../serialization.md](../serialization.md). That doc explains _what_ and _why_; this doc is _how_ and _when_. Agents picking up a phase should read both.
 
 ## Conventions for agents
 
@@ -18,20 +18,22 @@ Companion to [../serialization.md](../serialization.md). That doc explains *what
 ## Phase dependency graph
 
 ```
-Phase 0 (module split: Encode / Decode)
+Phase 0 (module split: Encode / Decode)            DONE
    ↓
-Phase 1 (encoder primitives + render)
+Phase 1 (encoder primitives + render)              DONE
    ↓
-Phase 2 (ToJson trait + primitive/container impls)
+Phase 2 (ToJson trait + primitive/container impls) DONE
    ↓
-Phase 3 (post-process combinators)
+Phase 3 (post-process combinators)                 DONE
    ↓
-Phase 4 (Generic integration)  ← blocked on compiler
+Phase 4 (Generic integration)                      DONE
    ↓
-Phase 5 (FromJson + shared infrastructure)
+Phase 5 (Symbols migration + cleanup)              DONE
+   ↓
+Phase 6 (FromJson + shared infrastructure)
 ```
 
-Phases 0–3 can ship before any compiler work lands. Phase 4 requires Generic auto-derive (`saga/examples/99-generic-spike.saga` → Phase 3 of the compiler spike). Phase 5 reuses Phase 4 infrastructure.
+Phases 0–3 shipped before any compiler work landed. Phase 4 shipped against the compiler's first Generic-deriving release. Phase 5 migrates Encode to the type-level-Symbol representation of `Labeled` / `Variant` (compiler change landed mid-2026-05) — this is a prerequisite for correct sum-type FromJson decoding in Phase 6. Phase 6 adds FromJson on top of the migrated foundation.
 
 Within a phase, sub-tasks may be parallelizable; called out per phase.
 
@@ -292,7 +294,30 @@ Five independent functions; one agent can do all five in one pass. The shared co
 
 ---
 
-## Phase 4: Generic integration
+## Phase 4: Generic integration — **DONE**
+
+**Status:** Shipped. All four `TagFormat` variants implemented; tests in
+[tests/DerivingTest.saga](../../../tests/DerivingTest.saga) cover derived records,
+externally-tagged ADTs (unit / single-arg / multi-arg), recursive types, the
+Options-threading regression, all five `NameStyle` variants, `omit_nothing`,
+and all four `TagFormat` variants. 151 tests passing project-wide.
+
+The notes below preserve the original phase plan for context. Two pieces of
+the original plan diverged from what shipped:
+
+- **Test 5 (conflict rule) was omitted.** The compiler raises `duplicate impl`
+  when a type has both `deriving (ToJson)` and a hand-written `impl ToJson for T`.
+  The Generic Deriving guide and serialization design doc previously promised
+  silent precedence; we resolved the mismatch in favor of the hard error
+  (silent precedence would let a derive sneak in under an existing manual impl
+  with no signal). Both docs updated.
+- **Tag formats were originally split into "implement now" and "Phase 4.x
+  follow-up".** That follow-up landed in the same phase. All four formats
+  (`ExternallyTagged`, `AdjacentlyTagged`, `InternallyTagged`, `Untagged`) work
+  end-to-end. `InternallyTagged` falls back to externally-tagged for primitive
+  / array payloads (matches serde's restriction; documented on `TagFormat`).
+
+---
 
 **Goal:** `deriving (ToJson)` works for user records and ADTs. `Options` unlocks Tier 2's "derive-with-knobs" middle ground. `to_json` grows an Options parameter, becoming the single Generic-aware entry point.
 
@@ -410,16 +435,16 @@ pub type TagFormat = ExternallyTagged | AdjacentlyTagged | InternallyTagged | Un
 pub val default_options : Options
 ```
 
-There is no separate `generic_to_json` entry point. `to_json opts x` *is* the Generic-driven encoder when `x`'s type has `deriving (ToJson)`. The dispatch happens through the trait dict.
+There is no separate `generic_to_json` entry point. `to_json opts x` _is_ the Generic-driven encoder when `x`'s type has `deriving (ToJson)`. The dispatch happens through the trait dict.
 
 ### Canonical default shape (locked here, hard to change later)
 
-| Aspect | Default |
-|---|---|
-| Sum encoding | `ExternallyTagged` |
+| Aspect            | Default                                                     |
+| ----------------- | ----------------------------------------------------------- |
+| Sum encoding      | `ExternallyTagged`                                          |
 | Unit constructors | `{"Admin": null}` (do not specialize to bare strings in v1) |
-| `Maybe Nothing` | `null` |
-| Field naming | `AsIs` (use Saga field name unchanged) |
+| `Maybe Nothing`   | `null`                                                      |
+| Field naming      | `AsIs` (use Saga field name unchanged)                      |
 
 ### Tests / acceptance
 
@@ -429,8 +454,8 @@ Update [src/Main.saga](../../../src/Main.saga):
 2. Add a Tier 2 example: hand-written impl on `User`, body `to_json_with opts u = Json.derive_with (Options { rename_all: CamelCase, ..opts }) u`. Verify camelCased output.
 3. Add a Tier 2 example combining Generic with post-process combinators: `Json.derive_with opts u |> J.rename_field "manager" "supervisor"`.
 4. Test an ADT with `deriving (ToJson)` — e.g., a `Role = Admin | Editor | Viewer` type — and verify the externally-tagged output.
-5. Conflict rule: write a type with both `deriving (ToJson)` and a hand-written `impl ToJson for X` in the same module. Per the [guide](../../../../../saga-website/app/content/guide/generic-deriving.md), the hand-written impl wins silently. Verify by checking output matches the hand-written impl, not the derived shape.
-6. **Options-threading regression test:** encode a deeply nested record (User → Address → Coords-like depth) via `Json.serialize_with (Options { rename_all: CamelCase, .. })` and assert that the *leaf-most* field name is camelCased. If any building-block impl accidentally recurses via bare `to_json` instead of `to_json_with`, this test fails — catching the footgun.
+5. ~~Conflict rule: write a type with both `deriving (ToJson)` and a hand-written `impl ToJson for X`.~~ **Dropped:** the compiler raises `duplicate impl` instead of silently preferring the manual one. Design doc and Generic Deriving guide updated to match.
+6. **Options-threading regression test:** encode a deeply nested record (User → Address → Coords-like depth) via `Json.serialize_with (Options { rename_all: CamelCase, .. })` and assert that the _leaf-most_ field name is camelCased. If any building-block impl accidentally recurses via bare `to_json` instead of `to_json_with`, this test fails — catching the footgun.
 
 ### Out of scope
 
@@ -448,15 +473,148 @@ Update [src/Main.saga](../../../src/Main.saga):
 
 ---
 
-## Phase 5: `FromJson` + shared infrastructure
+## Phase 5: Symbols migration + cleanup — **DONE**
 
-**Goal:** Symmetric decode path. Reuse `Options` knobs (the same `rename_all`, `tag_format`, etc. apply in reverse). Add post-process `refine` for decoders to handle invariants the schema can't express.
+**Status:** Shipped. `Labeled` and `Variant` building-block impls migrated to
+the compiler's type-level Symbol representation; `Options` / `NameStyle` /
+`TagFormat` / `default_options` moved to the root `SagaJson` module so both
+Encode and Phase 6's FromJson can share them; `apply_name_style` re-anchored
+on the Symbol-reflected source name. All 151 tests pass on the new
+representation. `saga run src/Main.saga` output unchanged.
 
-**Depends on:** Phase 4 complete.
+What shipped:
+
+- `impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson}` —
+  pattern is now `Labeled x`, name read via `symbol_name (Proxy : Proxy n)`.
+- `impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload}` —
+  pattern is now `Variant payload`, name read via `symbol_name`. The
+  Symbol-reflected name is passed through `apply_name_style` before being
+  emitted, matching the `Labeled` path (symmetric `rename_all` semantics).
+- `VariantPayload` impls (U1, Leaf, And) unchanged — they don't carry the
+  variant name; `Variant` reads its own symbol and threads the name into
+  the final object / tag.
+- Options + name-style + tag-format types moved verbatim to
+  `lib/SagaJson.saga`; Encode imports them. Helper functions
+  (`apply_name_style`, `snake_to_camel`, `capitalize`) stay in Encode for
+  now — Phase 6 can pull them out if FromJson needs them.
+
+Saga gotchas surfaced:
+
+- **Impl headers need explicit kind annotations for non-Star type params.**
+  `impl ToJson for Variant n a where {n: KnownSymbol, ...}` is rejected with
+  `kind mismatch: type variable n has kind Star but trait KnownSymbol expects
+  kind Symbol`. The fix is to write the kind in the impl head:
+  `impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, ...}`.
+  The guide already shows this form; the spec example in the kickoff prompt
+  elided it. Same shape for `Labeled (n : Symbol) a`.
+- **Trait default-method bodies don't carry their lexical scope across
+  module boundaries.** The `to_json` default body references `default_options`;
+  when the trait is used from another module (`ToJsonTest`, `DerivingTest`),
+  the compiler fails with `undefined variable: default_options` even though
+  Encode imports it. Workaround: write the reference fully-qualified as
+  `SagaJson.default_options` in the trait body. A short alias (e.g.
+  `import SagaJson as J` + `J.default_options`) doesn't work — the qualifier
+  has to be the absolute module name. Worth flagging to the compiler team:
+  trait default bodies should resolve free variables at trait-declaration
+  scope, not at impl-use scope.
+
+What's next: Phase 6 (FromJson). Design decisions are pinned in the Phase 6
+section below — do not relitigate (`Options` stays unified, `FromJsonFields`
+is lookup-based, `FromJsonArgs` is positional with returned residue, sum
+dispatch is name-based via `KnownSymbol`). The Symbol migration in this
+phase is the prerequisite that makes the sum-type dispatch correct.
+
+---
+
+## Phase 5 (original spec — preserved for historical context)
+
+**Goal:** Migrate the Encode building-block impls to the compiler's new type-level-Symbol representation of `Labeled` / `Variant`. Move `Options` to the shared root module. Lock in the symmetric `rename_all` source convention. This is a prerequisite for correct FromJson sum-type decoding in Phase 6 — without it, the synthesized `from` would wildcard variant names and `Or`'s left-bias would silently mis-decode any sum where variants share a payload shape (which includes enum-style ADTs like `Role = Admin | Editor | Viewer`).
+
+**Why a separate phase:** The migration touches every Encode building-block impl that mentions `Labeled` or `Variant` (pattern shapes change, runtime name reads become symbol reflection, trait constraints grow `KnownSymbol`). Doing it in the same phase as FromJson would conflate two distinct lines of churn — the symbol migration is a "make the existing tests still pass on a new representation" exercise, while FromJson is "add a new direction." Separating them keeps each phase's diff focused.
+
+**Depends on:** Phase 4 complete, and the compiler's Symbol/KnownSymbol release (mid-2026-05). Confirm before starting by verifying that `Labeled (n : Symbol) a` and `Variant (n : Symbol) a` from `Std.Generic` are the current shapes, and that `KnownSymbol` + `symbol_name (Proxy : Proxy n)` resolve.
+
+### Required reading
+
+1. [../serialization.md](../serialization.md) — design doc; especially "Why four traits" and the updated `Labeled` / `Variant` signatures in the Rep building-block list.
+2. [Generic Deriving guide](../../../../../saga-website/app/content/guide/generic-deriving.md) — "Type-level names" section (~line 90) and the worked `ToJson` example showing the `n: KnownSymbol` constraint pattern.
+3. [lib/Encode.saga](../../../lib/Encode.saga) — your migration target. The impls that need changes are listed under Deliverables below.
 
 ### Deliverables
 
-In `lib/SagaJson/Decode.saga` (alongside the existing decoder primitives moved there in Phase 0):
+**A. Migrate Encode building-block impls to type-level Symbols.**
+
+Every impl that currently destructures a runtime name field on `Labeled` or `Variant` changes shape. Audit and update each:
+
+| Old                                                   | New                                                                                 |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `impl ToJsonFields for Labeled a where {a: ToJson}`   | `impl ToJsonFields for Labeled n a where {n: KnownSymbol, a: ToJson}`               |
+| `to_fields opts (Labeled name x) = ...`               | `to_fields opts (Labeled x) = { let name = symbol_name (Proxy : Proxy n); ... }`    |
+| `impl ToJson for Variant a where {a: VariantPayload}` | `impl ToJson for Variant n a where {n: KnownSymbol, a: VariantPayload}`             |
+| `to_json_with opts (Variant name p) = ...`            | `to_json_with opts (Variant p) = { let name = symbol_name (Proxy : Proxy n); ... }` |
+
+The `VariantPayload` building-block impls (currently on `U1`, `Leaf a`, `And l r`) do not carry the variant name — `Variant` reads its own symbol and threads the name down into `object [(name, payload_json p)]`. Verify that no `VariantPayload` impl needs the symbol; if one does, surface it before improvising.
+
+All other impls (`Leaf`, `And`, `Or`, `Record`, `Adt`, `U1`, primitives, containers) are unaffected.
+
+**B. Move `Options` to `lib/SagaJson.saga` (root module).**
+
+Currently defined in `lib/Encode.saga` lines 112–149 (`NameStyle`, `TagFormat`, `Options`, `default_options`). Move them verbatim to the root module. Update `lib/Encode.saga` to import from `SagaJson`. Phase 6 will import the same definitions for FromJson. Rationale: neither direction owns `Options`; it's shared infrastructure.
+
+**C. Lock in the `rename_all` source convention.**
+
+Symbols reflect to the source identifier as written in the Saga source (e.g., field `user_id` reflects to `"user_id"`). Document that the library treats this as the canonical input to `rename_all`. The library _applies_ `rename_all` to the source name to produce the output key on encode (and the expected input key on decode in Phase 6). Source convention is snake_case by Saga style; users who write `user_id` and want output `userId` use `Options { rename_all: CamelCase, .. }`.
+
+Pin this in the design doc's `rename_all` section. The semantic is now symmetric and meaningful in both directions.
+
+**D. Update tests.**
+
+[tests/DerivingTest.saga](../../../tests/DerivingTest.saga) (24 tests from Phase 4) currently tests against the old value-level-name building-block shape. Pattern matches in any helper or assertion that mentions `Labeled name x` or `Variant name x` need updating. Run the full suite (`saga test`) to confirm — the 151-test baseline must still pass when migration is done.
+
+**E. Sanity-check hand-written impls.**
+
+Existing hand-written impls in [src/Main.saga](../../../src/Main.saga) (Coords, Address, User, Role) don't touch `Labeled` or `Variant` directly — they go through the public `ToJson` trait. They should be unaffected, but verify by running `saga run`.
+
+### Out of scope for Phase 5
+
+- **No FromJson code.** That's Phase 6. Resist the urge to "start sketching the symmetric impl while I'm in here." The migration is its own deliverable.
+- **No new Options fields.** The set is locked.
+- **No attribute system.** Still no.
+- **No public-API changes.** Users calling `serialize` / `serialize_with` / `derive_with` should see byte-identical output before and after migration. If anything user-visible changes, that's a regression to investigate.
+
+### Tests / acceptance
+
+1. All 151 existing tests pass (`saga test`). No new tests required for this phase — passing the existing suite on the migrated representation IS the acceptance criterion.
+2. `saga run src/Main.saga` produces output byte-identical to the pre-migration version. (Encode hasn't changed semantically; only the internal representation it dispatches against.)
+3. The Options-threading regression test from Phase 4 (deeply-nested record with `rename_all: CamelCase`) still asserts correctly on the leaf field name.
+
+### When to stop and ask
+
+- Any impl where the migration isn't a mechanical rewrite — i.e., the new shape needs structurally different logic, not just `symbol_name` substitution. That's a signal we missed something in the design.
+- Compiler errors that suggest `KnownSymbol` resolution isn't firing where expected. Possible interaction with the trait dispatch we want to flag.
+- Any test that breaks in a way the migration shouldn't have caused. Likely a separate bug; surface before working around.
+
+### Parallelizable subtasks
+
+The migration is sequentially small enough that one agent does it in one pass. Order:
+
+1. Move `Options` to root module (B). Update Encode's imports.
+2. Migrate the Labeled / Variant building-block impls (A).
+3. Run the test suite, fix breakage (D).
+4. Verify Main.saga output unchanged (E).
+5. Update the design doc's `rename_all` section + the `Labeled` / `Variant` signature blocks (C, plus any doc-prose that mentions value-level names).
+
+---
+
+## Phase 6: `FromJson` + shared infrastructure
+
+**Goal:** Symmetric decode path. Reuse `Options` knobs (the same `rename_all`, `tag_format`, etc. apply in reverse). Add post-process `refine` for decoders to handle invariants the schema can't express. Sum-type decoding is correct because Phase 5's Symbol migration made `Variant n a` discriminable by `n`.
+
+**Depends on:** Phase 5 complete.
+
+### Deliverables
+
+In `lib/Decode.saga` (alongside the existing function-based decoder primitives that have been there since Phase 0):
 
 ```
 pub trait FromJson a {
@@ -466,31 +624,77 @@ pub trait FromJson a {
 }
 
 # Primitive + container impls mirroring ToJson on the Encode side
+# (String, Int, Float, Bool, List a, Maybe a)
 
-pub fun derive_from_with : Options -> Json -> a needs {Fail Error} where {a: Generic a r, FromJson r}
-derive_from_with opts j = ...   # symmetric to Encode.derive_with
+# Helper traits — library-internal, not pub.
+trait FromJsonFields a {
+  fun from_fields : Options -> List (String, Json) -> a needs {Fail Error}
+}
+
+trait FromJsonArgs a {
+  fun from_args : Options -> List Json -> (a, List Json) needs {Fail Error}
+}
+
+trait FromVariantPayload a {
+  fun decode_payload : Options -> Json -> a needs {Fail Error}
+}
+
+# Building-block impls (mirror Encode's 12, with the right helper trait per position)
+
+pub fun derive_from_with : Options -> Json -> a needs {Fail Error}
+  where {Generic a r, FromJson r}
 
 pub fun deserialize      : String -> Result a Error where {a: FromJson}
 pub fun deserialize_with : Options -> String -> Result a Error where {a: FromJson}
 
-pub fun refine : (a -> a needs {Fail Error}) -> (Json -> a needs {Fail Error}) -> Json -> a needs {Fail Error}
+pub fun refine : (a -> a needs {Fail Error})
+              -> (Json -> a needs {Fail Error})
+              -> Json -> a needs {Fail Error}
 ```
 
-`refine` wraps a decoder and applies an extra invariant check (zod-style). Distinct from the current `Fail Error` short-circuit in that it post-processes a successfully decoded value.
+### Design decisions
 
-`Options` is imported from `SagaJson.Encode` — it's shared. Some fields (e.g., `omit_nothing`) only make sense in one direction; document that.
+- **`FromJsonFields` is lookup-based, not positional-with-state.** Each `Labeled n a` impl independently calls `symbol_name`, applies `rename_all` (using `Options`), looks up the resulting key in the input field list, and decodes. `And` for `FromJsonFields` runs both sides against the same input list. Order-independent, missing-field failures land naturally.
+- **`FromJsonArgs` stays positional.** Variant args are inherently ordered (`Rect 1.0 2.0`). `from_args` returns the decoded value paired with the remaining unconsumed input list; `And` chains them via the returned residue.
+- **Sum dispatch is name-based.** `Variant n a`'s impl reflects its expected symbol via `KnownSymbol`, checks against the input tag, and fails if they don't match. `Or`'s try-left-fallback-to-right pattern then walks the variant chain correctly because mismatched branches now genuinely fail (which they didn't pre–Phase 5).
+- **Coexistence with `parse` / `run`.** Both APIs stay. `deserialize` is the trait-based entry point. `parse` and `run` (function-based decoders) remain for ad-hoc cases where the user doesn't want to define a type.
+- **`Options` is in `lib/SagaJson.saga`** (moved there in Phase 5). FromJson imports from root.
+- **`Options` stays unified** (no `EncodeOptions` / `DecodeOptions` split). `omit_nothing` is encode-only and documented on the field as such.
+
+### `refine`
+
+```
+pub fun refine : (a -> a needs {Fail Error})
+              -> (Json -> a needs {Fail Error})
+              -> Json -> a needs {Fail Error}
+```
+
+Wraps a decoder and applies an extra invariant check (zod-style). Distinct from `Fail Error` short-circuit during decoding — it post-processes a successfully decoded value to enforce invariants the type system can't express. Example: a `User` with `age >= 0`.
 
 ### Tests / acceptance
 
-1. Round-trip every type touched in Phase 4: encode with `to_json`, decode with `from_json`, verify equality.
-2. With non-default `Options`, verify symmetry: `from_json options (to_json options x) == x` for the matching options on both sides.
-3. `refine` example: a `User` with `age >= 0` invariant. Verify the refined decoder fails on negative ages with a clear error.
+In `tests/FromJsonTest.saga` (mirror `tests/DerivingTest.saga`):
 
-### Open questions to resolve in this phase
+1. **Round-trip every type from Phase 4's demos:** encode with `to_json`, decode with `from_json`, verify equality. Includes the `Role` enum — this is the test that proves sum-type decoding works.
+2. **Options symmetry:** `from_json_with opts (to_json_with opts x) == x` for non-default `Options` (camelCase rename_all on a nested record). Encode and decode use the same Options; round-trip preserves the value.
+3. **Tag-mismatch failure:** decode `{"NotAVariant": null}` as `Role`. Expect a clean `Fail Error` from `Or` exhausting both branches with no name match.
+4. **Missing-field failure:** decode `{"name": "Alice"}` as a record requiring both `name` and `age`. Expect a clean failure naming the missing field.
+5. **`refine` example:** `User { age: Int }` with invariant `age >= 0`. Refined decoder fails on negative ages with a useful error.
+6. **All 151 existing tests still pass** (the Phase 5 → Phase 6 regression bar).
 
-- How does the existing function-based `parse` / `run` API in `lib/SagaJson/Decode.saga` compose with the new trait? Probably `from_json` should *be* a decoder (`Json -> a needs {Fail Error}`), so `parse from_json some_string` works. Verify before designing.
-- Where does `Options` live? Currently spec'd in `Encode`. Could move to `SagaJson` (shared root module) since both directions use it, or keep in `Encode` and have `Decode` import. Probably move to root for symmetry — decide here.
-- `Options` unified vs split (`EncodeOptions` / `DecodeOptions`)? Lean unified; document irrelevant fields per direction.
+### Out of scope
+
+- No attribute system.
+- No per-field Options knobs.
+- No `JsonCodec` single-trait shortcut.
+- No changes to `lib/Encode.saga` unless `Options`-related (which should be settled in Phase 5).
+
+### Parallelizable subtasks
+
+- FromJson trait declaration + helper traits + primitive/container impls — agent A
+- Building-block impls (~12, mirroring Encode) — agent B, after agent A declares traits
+- Layer-3 helpers (`deserialize`, `deserialize_with`, `derive_from_with`, `refine`) — agent C, depends on traits
+- Tests + Main.saga round-trip demo — depends on all above
 
 ---
 

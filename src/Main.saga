@@ -2,9 +2,9 @@ module Main
 
 import Std.Fail (Fail)
 import Std.IO (console)
-import SagaJson as J (Json)
+import SagaJson as J (Json, Options, NameStyle, default_options, CamelCase)
 import SagaJson.Decode as D
-import SagaJson.Encode as E (ToJson, Options, NameStyle, default_options)
+import SagaJson.Encode as E (ToJson)
 
 val user_json = """
   {

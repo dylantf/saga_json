@@ -11,7 +11,8 @@ import Std.Fail (Fail)
 import Std.Int
 import Std.List
 import Std.String
-import SagaJson (Json, Error, from_value, to_value)
+import SagaJson (Json, Error, from_value, to_value, NameStyle, TagFormat, Options)
+import SagaJson as J
 import SagaJson.Parser (Value)
 
 # --- Primitive constructors ---
@@ -102,62 +103,14 @@ unicode_escape c = {
   BS.from_string $"\\u00{padded}"
 }
 
-# --- Options ---
-#
-# Uniform encoding knobs. Per-field renames / per-field overrides live in
-# hand-written impls; `Options` is restricted to whole-record policies.
-
-#@ How record field names and (eventually) variant names are transformed
-#@ before emission. Source convention is snake_case Saga identifiers.
-pub type NameStyle =
-  | AsIs
-  | CamelCase
-  | KebabCase
-  | SnakeCase
-  | ScreamingSnakeCase
-
-#@ How sum-type variants are tagged in the emitted JSON.
-#@
-#@ - `ExternallyTagged` (default): `{"Variant": payload}`.
-#@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
-#@    both fields always emitted, including for unit (U1) variants where
-#@    `content_field` carries `null`.
-#@ - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
-#@    Only well-defined when the payload renders to a JSON object (single
-#@    record-valued variants) or `null` (unit variants). For primitive /
-#@    array payloads the encoder falls back to `ExternallyTagged` — same
-#@    restriction as serde.
-#@ - `Untagged`: emit the payload directly; variant identity is lost.
-pub type TagFormat =
-  | ExternallyTagged
-  | AdjacentlyTagged
-  | InternallyTagged
-  | Untagged
-
-#@ Uniform encoder options. Construct with record syntax; start from
-#@ `default_options` and override with `{ default_options | field: value }`.
-pub record Options {
-  rename_all: NameStyle,
-  omit_nothing: Bool,
-  tag_format: TagFormat,
-  tag_field: String,
-  content_field: String,
-}
-
-#@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
-#@ externally-tagged sums.
-pub val default_options = Options {
-  rename_all: AsIs,
-  omit_nothing: False,
-  tag_format: ExternallyTagged,
-  tag_field: "tag",
-  content_field: "content",
-}
-
 # --- Name-style helpers ---
 #
-# Source names are assumed snake_case per serde convention. Each transformer
-# operates on a single identifier string.
+# Source names are the source identifier as written in Saga source —
+# reflected via `KnownSymbol`/`symbol_name` from the type-level Symbol
+# on `Labeled` and `Variant`. Saga style is snake_case, so the
+# transformers below assume a snake_case input. `apply_name_style` is
+# the canonical encode-side step; Phase 6's FromJson will apply the
+# same transform symmetrically to derive the expected input key.
 
 fun apply_name_style : NameStyle -> String -> String
 apply_name_style ns s = case ns {
@@ -200,7 +153,7 @@ capitalize s = {
 pub trait ToJson a {
   fun to_json_with : Options -> a -> Json
   fun to_json : a -> Json
-  to_json x = to_json_with default_options x
+  to_json x = to_json_with SagaJson.default_options x
 }
 
 # Library-internal: produces a list of (field-name, value) pairs. Used by
@@ -278,8 +231,9 @@ impl ToJson for Record a where {a: ToJsonFields} {
   }
 }
 
-impl ToJson for Variant a where {a: VariantPayload} {
-  to_json_with opts (Variant name payload) = {
+impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload} {
+  to_json_with opts (Variant payload) = {
+    let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
     let p = payload_json opts payload
     case opts.tag_format {
       ExternallyTagged -> object [(name, p)]
@@ -306,10 +260,11 @@ impl ToJson for Adt a where {a: ToJson} {
 }
 
 # ToJsonFields — record-interior dispatch.
-impl ToJsonFields for Labeled a where {a: ToJson} {
-  to_fields opts (Labeled name x) = [
-    (apply_name_style opts.rename_all name, to_json_with opts x),
-  ]
+impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
+  to_fields opts (Labeled x) = {
+    let name = symbol_name (Proxy : Proxy n)
+    [(apply_name_style opts.rename_all name, to_json_with opts x)]
+  }
 }
 
 impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {

@@ -51,6 +51,64 @@ to_value j = case j {
 
 # --- Entry points ---
 
+# --- Shared encoder/decoder options ---
+#
+# Options live in the root module because both encode and decode consume
+# them. Uniform knobs only — anything that names a specific field belongs
+# in a hand-written impl.
+
+#@ How record field names and variant names are transformed before
+#@ emission (encode) or matched against input (decode). Source
+#@ convention is snake_case Saga identifiers (the type-level Symbol
+#@ reflects the source name verbatim); `rename_all` is applied to that
+#@ source name symmetrically on both directions.
+pub type NameStyle =
+  | AsIs
+  | CamelCase
+  | KebabCase
+  | SnakeCase
+  | ScreamingSnakeCase
+
+#@ How sum-type variants are tagged in JSON.
+#@
+#@ - `ExternallyTagged` (default): `{"Variant": payload}`.
+#@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
+#@    both fields always emitted, including for unit (U1) variants where
+#@    `content_field` carries `null`.
+#@ - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
+#@    Only well-defined when the payload renders to a JSON object (single
+#@    record-valued variants) or `null` (unit variants). For primitive /
+#@    array payloads the encoder falls back to `ExternallyTagged` — same
+#@    restriction as serde.
+#@ - `Untagged`: emit the payload directly; variant identity is lost.
+pub type TagFormat =
+  | ExternallyTagged
+  | AdjacentlyTagged
+  | InternallyTagged
+  | Untagged
+
+#@ Uniform codec options. Shared between encode and decode so a single
+#@ `Options` value drives a symmetric round-trip. Construct with
+#@ record-update syntax: `{ default_options | rename_all: CamelCase }`.
+#@ Note: `omit_nothing` is encode-only (no-op on decode).
+pub record Options {
+  rename_all: NameStyle,
+  omit_nothing: Bool,
+  tag_format: TagFormat,
+  tag_field: String,
+  content_field: String,
+}
+
+#@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
+#@ externally-tagged sums.
+pub val default_options = Options {
+  rename_all: AsIs,
+  omit_nothing: False,
+  tag_format: ExternallyTagged,
+  tag_field: "tag",
+  content_field: "content",
+}
+
 #@ Parse a JSON string into a Json value, without applying a decoder.
 pub fun parse_string : String -> Result Json Error
 parse_string s = case SagaJson.Parser.parse s {

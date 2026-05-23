@@ -171,20 +171,39 @@ trait VariantPayload a {                            # library-internal, not pub
 
 Building-block impls each implement only the trait matching their position. Some Rep types appear in multiple positions and therefore implement multiple traits — that's fine; no overlap because the traits are distinct.
 
+`Labeled` and `Variant` carry their name at the **type level** (`Labeled (n : Symbol) a`, `Variant (n : Symbol) a`). Impls reflect the name at runtime via `KnownSymbol`:
+
+```
+impl ToJsonFields for Labeled n a where {n: KnownSymbol, a: ToJson} {
+  to_fields opts (Labeled x) = {
+    let name = symbol_name (Proxy : Proxy n)
+    [(apply_rename opts.rename_all name, to_json_with opts x)]
+  }
+}
+```
+
+The full impl list:
+
 - `Leaf a where {a: ToJson}` → `ToJson` (passthrough — used when Leaf is inside Labeled in a record field)
 - `Leaf a where {a: ToJson}` → `ToJsonArgs` (produces `[to_json x]` — used inside And in a multi-arg variant)
 - `Leaf a where {a: ToJson}` → `VariantPayload` (unwraps the leaf — used as sole payload of a single-arg variant)
-- `Labeled a where {a: ToJson}` → `ToJsonFields` (produces `[(name, to_json x)]`)
+- `Labeled n a where {n: KnownSymbol, a: ToJson}` → `ToJsonFields` (reflects `n`, applies `rename_all`, produces `[(name, to_json x)]`)
 - `And l r where {l: ToJsonFields, r: ToJsonFields}` → `ToJsonFields` (concat fields)
 - `And l r where {l: ToJsonArgs, r: ToJsonArgs}` → `ToJsonArgs` (concat args)
 - `And l r where {l: ToJsonArgs, r: ToJsonArgs}` → `VariantPayload` (wraps `to_args` result in an array)
 - `Or l r where {l: ToJson, r: ToJson}` → `ToJson` (forwards to whichever branch is present)
 - `U1` → `VariantPayload` (returns `null`)
 - `Record a where {a: ToJsonFields}` → `ToJson` (wraps fields in object)
-- `Variant a where {a: VariantPayload}` → `ToJson` (emits `{name: payload}`)
+- `Variant n a where {n: KnownSymbol, a: VariantPayload}` → `ToJson` (reflects `n` for the tag, emits `{name: payload}`)
 - `Adt a where {a: ToJson}` → `ToJson` (passthrough)
 
 Twelve impls total. Three on Leaf (one per trait it participates in), three on And, one each on the rest.
+
+### Type-level names matter for the from-direction
+
+The Symbol representation isn't just aesthetics — it's what makes sum-type FromJson decoding correct. With value-level names (the pre-mid-2026-05 representation), the compiler-synthesized `from` had to pattern-match `Variant _ payload` with a wildcard on the name field, because patterns can't usefully match on arbitrary strings. That meant `Or`'s try-left-fallback-to-right always succeeded on the left branch regardless of input — silent mis-decode for any sum where variants share a payload shape (including enum-style ADTs like `Role = Admin | Editor | Viewer`).
+
+With type-level names, each `Variant n a` impl knows its expected name (via `KnownSymbol`), compares it against the input tag, and fails on mismatch. `Or` then walks the variant chain correctly. The Symbol migration in Phase 5 is the prerequisite for this — see the plan doc's Phase 5 section.
 
 ### What this is not
 
@@ -285,9 +304,9 @@ Newtype wrappers handle the "one field needs special encoding" case (e.g., `type
 
 Initial fields:
 
-- `rename_all : NameStyle` — CamelCase, KebabCase, etc.
-- `omit_nothing : Bool` — drop `Maybe` fields that are `Nothing`, vs. emit `null`
-- `tag_format : TagFormat` — External / Adjacent / Internal / Untagged
+- `rename_all : NameStyle` — CamelCase, KebabCase, etc. **Symmetric**: applied to the source symbol (snake_case by Saga convention) on encode to produce the output key, and on decode to produce the expected input key. Round-trip works under any `NameStyle` as long as encode and decode share the same `Options`.
+- `omit_nothing : Bool` — **encode-only**. Drops `Maybe` fields that are `Nothing` instead of emitting `null`. No-op on decode.
+- `tag_format : TagFormat` — External / Adjacent / Internal / Untagged. Symmetric between directions. `InternallyTagged` falls back to `ExternallyTagged` for primitive/array payloads (serde-style restriction).
 - `tag_field : String`, `content_field : String` — for Adjacent
 
 Resist adding `overrides : Map String (a -> Json)` or `field_renames : Map`. Those reinvent attributes as a stringly-typed record with worse type checking. The escape hatch for per-field control is dropping to hand-built `J.object`.
@@ -343,7 +362,7 @@ Decisions baked into `deriving (ToJson)` with default Options. These are sticky 
 | Sum encoding      | Externally tagged: `{"Move": {...}}`                    | Only format that round-trips arbitrary sums  |
 | Unit constructors | `{"Admin": null}`                                       | Could specialize to bare `"Admin"`; pick one |
 | `Maybe` fields    | Emit `null` for `Nothing`                               | Symmetric with decoding, lossless            |
-| Field naming      | Use record field names as-is (snake_case)               | `rename_all` handles foreign APIs            |
+| Field naming      | Reflect source symbol (snake_case by Saga convention); apply `rename_all` symmetrically on encode and decode | `rename_all: CamelCase` produces `userId` on encode and expects `userId` on decode |
 | Float formatting  | TBD — needs decision; printf-`%g` is good enough for v1 | Shortest round-trip is a project unto itself |
 
 ## Conflict rule
