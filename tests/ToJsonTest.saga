@@ -62,6 +62,35 @@ tests () = {
           "[1,null,3]")
     })
 
+    describe "tuple impls" (fun () -> {
+      test "tuple-2 mixed types" (fun () ->
+        assert_eq (serialize (1, "hi")) "[1,\"hi\"]")
+      test "tuple-3 ints" (fun () ->
+        assert_eq (serialize (1, 2, 3)) "[1,2,3]")
+      test "tuple-4 mixed" (fun () ->
+        assert_eq (serialize (1, True, "x", 1.5)) "[1,true,\"x\",1.5]")
+      test "tuple-5" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5)) "[1,2,3,4,5]")
+      test "tuple-6" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6)) "[1,2,3,4,5,6]")
+      test "tuple-7" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7)) "[1,2,3,4,5,6,7]")
+      test "tuple-8" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7, 8)) "[1,2,3,4,5,6,7,8]")
+      test "tuple-9" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9)) "[1,2,3,4,5,6,7,8,9]")
+      test "tuple-10" (fun () ->
+        assert_eq
+          (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+          "[1,2,3,4,5,6,7,8,9,10]")
+      test "nested tuple" (fun () ->
+        assert_eq (serialize ((1, 2), (3, 4))) "[[1,2],[3,4]]")
+      test "tuple with Maybe" (fun () ->
+        assert_eq
+          (serialize (Just 1, Nothing : Maybe Int, "x"))
+          "[1,null,\"x\"]")
+    })
+
     describe "hand-written record impls" (fun () -> {
       test "flat record" (fun () ->
         assert_eq

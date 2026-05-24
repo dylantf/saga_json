@@ -40,4 +40,10 @@ run () = {
     person: Person { name: "Alice", age: 30 },
     role: Editor,
   }))
+
+  # Tuples (arity 2..10) encode as positional JSON arrays. Element types
+  # need `ToJson`; nesting and composition with `Maybe` / `List` works.
+  dbg (serialize (1, "hello"))
+  dbg (serialize (1.5, 2.5, 3.5))
+  dbg (serialize (Just 1, Nothing : Maybe Int, "x"))
 }

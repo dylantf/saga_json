@@ -185,6 +185,111 @@ impl ToJson for Maybe a where {a: ToJson} {
   }
 }
 
+# Tuple impls (arity 2..10). Encoded as positional JSON arrays.
+impl ToJson for (a, b) where {a: ToJson, b: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2) = t
+    array [to_json_with opts x1, to_json_with opts x2]
+  }
+}
+
+impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3) = t
+    array [to_json_with opts x1, to_json_with opts x2, to_json_with opts x3]
+  }
+}
+
+impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2,
+      to_json_with opts x3, to_json_with opts x4,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson,
+    e: ToJson, f: ToJson, g: ToJson, h: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
+    f: ToJson, g: ToJson, h: ToJson, i: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i, j)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
+    f: ToJson, g: ToJson, h: ToJson, i: ToJson, j: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
+      to_json_with opts x10,
+    ]
+  }
+}
+
 # --- Building-block impls for the Generic Rep ---
 #
 # Twelve impls across four traits. Some Rep types appear in multiple

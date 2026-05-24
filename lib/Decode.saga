@@ -204,6 +204,138 @@ impl FromJson for Maybe a where {a: FromJson} needs {Fail Error} {
   from_json_with opts j = nullable (fun v -> from_json_with opts v) j
 }
 
+# Tuple impls (arity 2..10). Decoded from positional JSON arrays. The
+# input array length must match the tuple arity exactly.
+fun tuple_items : Int -> Json -> List Json needs {Fail Error}
+tuple_items expected j = case to_value j {
+  VArray items -> {
+    let n = List.length items
+    if n == expected then List.map from_value items
+    else fail! (InvalidShape $"Array of {show expected}" $"Array of {show n}" [])
+  }
+  other -> fail! (InvalidShape $"Array of {show expected}" (classify other) [])
+}
+
+impl FromJson for (a, b) where {a: FromJson, b: FromJson} needs {Fail Error} {
+  from_json_with opts j = case tuple_items 2 j {
+    [j1, j2] -> (from_json_with opts j1, from_json_with opts j2)
+    _ -> fail! (InvalidShape "Array of 2" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c)
+  where {a: FromJson, b: FromJson, c: FromJson} needs {Fail Error} {
+  from_json_with opts j = case tuple_items 3 j {
+    [j1, j2, j3] ->
+      (from_json_with opts j1, from_json_with opts j2, from_json_with opts j3)
+    _ -> fail! (InvalidShape "Array of 3" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson}
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 4 j {
+    [j1, j2, j3, j4] -> (
+      from_json_with opts j1, from_json_with opts j2,
+      from_json_with opts j3, from_json_with opts j4,
+    )
+    _ -> fail! (InvalidShape "Array of 4" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson}
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 5 j {
+    [j1, j2, j3, j4, j5] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5,
+    )
+    _ -> fail! (InvalidShape "Array of 5" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e, f)
+  where {
+    a: FromJson, b: FromJson, c: FromJson,
+    d: FromJson, e: FromJson, f: FromJson,
+  }
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 6 j {
+    [j1, j2, j3, j4, j5, j6] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+    )
+    _ -> fail! (InvalidShape "Array of 6" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e, f, g)
+  where {
+    a: FromJson, b: FromJson, c: FromJson, d: FromJson,
+    e: FromJson, f: FromJson, g: FromJson,
+  }
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 7 j {
+    [j1, j2, j3, j4, j5, j6, j7] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+      from_json_with opts j7,
+    )
+    _ -> fail! (InvalidShape "Array of 7" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h)
+  where {
+    a: FromJson, b: FromJson, c: FromJson, d: FromJson,
+    e: FromJson, f: FromJson, g: FromJson, h: FromJson,
+  }
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 8 j {
+    [j1, j2, j3, j4, j5, j6, j7, j8] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+      from_json_with opts j7, from_json_with opts j8,
+    )
+    _ -> fail! (InvalidShape "Array of 8" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h, i)
+  where {
+    a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson, h: FromJson, i: FromJson,
+  }
+  needs {Fail Error} {
+  from_json_with opts j = case tuple_items 9 j {
+    [j1, j2, j3, j4, j5, j6, j7, j8, j9] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+      from_json_with opts j7, from_json_with opts j8, from_json_with opts j9,
+    )
+    _ -> fail! (InvalidShape "Array of 9" "wrong length" [])
+  }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h, i, j)
+  where {
+    a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson, h: FromJson, i: FromJson, j: FromJson,
+  }
+  needs {Fail Error} {
+  from_json_with opts json = case tuple_items 10 json {
+    [j1, j2, j3, j4, j5, j6, j7, j8, j9, j10] -> (
+      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
+      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+      from_json_with opts j7, from_json_with opts j8, from_json_with opts j9,
+      from_json_with opts j10,
+    )
+    _ -> fail! (InvalidShape "Array of 10" "wrong length" [])
+  }
+}
+
 # --- Building-block impls for the Generic Rep ---
 #
 # Twelve impls across four traits, mirroring the Encode side. `Leaf a`

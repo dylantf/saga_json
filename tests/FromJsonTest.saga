@@ -115,6 +115,42 @@ tests () = {
           (deserialize (serialize (Nothing : Maybe Int)) : Result (Maybe Int) J.Error)
           (Ok Nothing))
 
+      test "tuple-2 round-trips" (fun () ->
+        assert_eq
+          (deserialize (serialize (1, "hi")) : Result (Int, String) J.Error)
+          (Ok (1, "hi")))
+
+      test "tuple-3 round-trips" (fun () ->
+        assert_eq
+          (deserialize (serialize (1, 2, 3)) : Result (Int, Int, Int) J.Error)
+          (Ok (1, 2, 3)))
+
+      test "tuple-4 round-trips mixed" (fun () ->
+        assert_eq
+          (deserialize (serialize (1, True, "x", 1.5))
+            : Result (Int, Bool, String, Float) J.Error)
+          (Ok (1, True, "x", 1.5)))
+
+      test "tuple-10 round-trips" (fun () ->
+        assert_eq
+          (deserialize (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+            : Result (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) J.Error)
+          (Ok (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+
+      test "nested tuple round-trips" (fun () ->
+        assert_eq
+          (deserialize (serialize ((1, 2), (3, 4)))
+            : Result ((Int, Int), (Int, Int)) J.Error)
+          (Ok ((1, 2), (3, 4))))
+
+      test "tuple decode rejects wrong length" (fun () ->
+        assert_err
+          (deserialize "[1,2,3]" : Result (Int, Int) J.Error))
+
+      test "tuple decode rejects non-array" (fun () ->
+        assert_err
+          (deserialize "{\"0\":1,\"1\":2}" : Result (Int, Int) J.Error))
+
       test "flat record (Coords)" (fun () -> {
         let c = Coords { lat: 1.0, lng: 2.0 }
         assert_eq (deserialize (serialize c) : Result Coords J.Error) (Ok c)
