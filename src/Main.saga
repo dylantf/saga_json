@@ -3,8 +3,8 @@ module Main
 import Std.Fail (Fail)
 import Std.IO (console)
 import SagaJson as J (Json, Options, NameStyle, default_options, CamelCase)
-import SagaJson.Decode as D
-import SagaJson.Encode as E (ToJson)
+import SagaJson.Decode as D (FromJson, deserialize)
+import SagaJson.Encode as E (ToJson, serialize)
 
 val user_json = """
   {
@@ -110,18 +110,18 @@ type Role =
   | Admin
   | Editor
   | Viewer
-  deriving (ToJson)
+  deriving (Debug, Eq, ToJson, FromJson)
 
 record Profile {
   first_name: String,
   last_name: String,
   role: Role,
-} deriving (ToJson)
+} deriving (Debug, Eq, ToJson, FromJson)
 
 record Account {
   user_info: Profile,
   account_id: Int,
-} deriving (ToJson)
+} deriving (Debug, Eq, ToJson, FromJson)
 
 impl E.ToJson for Coords {
   to_json_with _ c = E.object [("lat", to_json c.lat), ("lng", to_json c.lng)]
@@ -178,6 +178,12 @@ main () = {
   dbg (E.render (E.object [("nested", E.object [("k", E.int 1)])]))
   dbg (E.render (E.array [E.int 1, E.string "two", E.bool True, E.null]))
 
+  dbg "--- Phase 6: FromJson round-trip on Role ---"
+  dbg (E.serialize Admin)
+  dbg (deserialize "{\"Admin\":null}" : Result Role J.Error)
+  dbg (deserialize "{\"Editor\":null}" : Result Role J.Error)
+  dbg (deserialize "{\"Viewer\":null}" : Result Role J.Error)
+
   dbg "--- Phase 4: derived ADT (externally tagged) ---"
   dbg (E.serialize Admin)
   dbg (E.serialize Editor)
@@ -193,6 +199,12 @@ main () = {
   }
   let camel_opts = { default_options | rename_all: CamelCase }
   dbg (E.serialize_with camel_opts acct)
+
+  dbg "--- Phase 6: FromJson round-trip on Account (derived record) ---"
+  let acct_rt = acct
+  let acct_json = E.serialize acct_rt
+  dbg acct_json
+  dbg (deserialize acct_json : Result Account J.Error)
 
   dbg "--- Phase 2: serialize via ToJson + round-trip ---"
   case J.parse parse_user user_json {

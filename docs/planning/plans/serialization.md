@@ -5,15 +5,24 @@ Companion to [../serialization.md](../serialization.md). That doc explains _what
 ## Conventions for agents
 
 - Read [../serialization.md](../serialization.md) before starting. Especially the "Why not attributes" and "Options" sections — there's design that's easy to violate without context.
-- Module layout after Phase 0:
-  - `lib/SagaJson.saga` — shared types (`Json` opaque type, `Error`), `parse_string` (neutral entry point)
-  - `lib/SagaJson/Encode.saga` — encoder primitives, `render`, `ToJson` trait, building-block impls, `Options`, layer-3 `serialize`/`serialize_with`, `derive_with`
-  - `lib/SagaJson/Decode.saga` — decoder primitives, combinators (`field`, `at`, `list_of`, `nullable`), `run`/`parse`, `FromJson` trait (Phase 5)
-- Do **not** touch [lib/Parser.saga](../../../lib/Parser.saga). The parser is stable. Encoder work is downstream of the existing `Value` ADT.
+- Module layout (current, post-Phase 5):
+  - `lib/SagaJson.saga` — shared types (`Json` opaque type, `Error`), `parse_string` (neutral entry point), `Options` / `NameStyle` / `TagFormat` / `default_options`
+  - `lib/Encode.saga` — encoder primitives, `render`, `ToJson` trait, building-block impls, layer-3 `serialize`/`serialize_with`, `derive_with`
+  - `lib/Decode.saga` — function-based decoder primitives + combinators (`field`, `at`, `list_of`, `nullable`), `run`/`parse`; `FromJson` trait lands here in Phase 6
+- Do **not** touch [lib/Parser.saga](../../../lib/Parser.saga). The parser is stable.
 - Do **not** introduce attribute machinery (`@json.rename`, etc.). The decision is documented; don't relitigate it in code.
 - Don't add `Options` fields beyond the ones spec'd in the design doc, even if tempted. Especially nothing per-field.
 - After each phase, update [src/Main.saga](../../../src/Main.saga) with an example exercising the new API. The `Main.saga` examples are the integration test surface.
 - Verify each phase compiles and runs (`saga run` or whatever the project entrypoint is — check [project.toml](../../../project.toml)). Report any compiler bugs encountered separately; don't paper over them.
+
+### Language quirks worth knowing (carried forward from past phases)
+
+- **Multi-line function calls inside `{ ... }` blocks are layout-sensitive.** Continuation args at the same indent as the function name parse as separate statements. Symptom: misleading "type mismatch: expected X, got Unit" pointing at the test-entry import. Fix: keep on one line, parenthesize, or split via `let`.
+- **Record-update shorthand is `{ base | field: value }`**, NOT `{ ..base, field: value }`.
+- **Trait methods are called bare** (`to_json x`), not qualified. To enable bare resolution from another module, import the trait: `import SagaJson.Encode (ToJson)`.
+- **`Generic a r` constraints** on impl declarations use the bare form; on a `fun foo where {...}` clause, use `a: Generic r`.
+- **Impl headers need explicit kind annotations for `Symbol` params.** `impl Trait for Variant n a where {n: KnownSymbol, ...}` is rejected with "kind mismatch: n has kind Star." Must write `impl Trait for Variant (n : Symbol) a where {n: KnownSymbol, ...}`. (Phase 5)
+- **Trait default bodies don't resolve free names across modules.** If a trait declared in `M` has a default body referencing `some_value_from_M`, callers in other modules see `undefined variable` because the default body is re-elaborated at each impl-site without `M`'s lexical scope. Workaround: fully-qualify with the absolute module path (`SagaJson.default_options`, not aliased `J.default_options`). (Phase 5)
 
 ## Phase dependency graph
 
@@ -503,7 +512,7 @@ Saga gotchas surfaced:
 - **Impl headers need explicit kind annotations for non-Star type params.**
   `impl ToJson for Variant n a where {n: KnownSymbol, ...}` is rejected with
   `kind mismatch: type variable n has kind Star but trait KnownSymbol expects
-  kind Symbol`. The fix is to write the kind in the impl head:
+kind Symbol`. The fix is to write the kind in the impl head:
   `impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, ...}`.
   The guide already shows this form; the spec example in the kickoff prompt
   elided it. Same shape for `Labeled (n : Symbol) a`.
@@ -606,7 +615,87 @@ The migration is sequentially small enough that one agent does it in one pass. O
 
 ---
 
-## Phase 6: `FromJson` + shared infrastructure
+## Phase 6: `FromJson` + shared infrastructure — **DONE**
+
+**Status:** Shipped. `FromJson` trait + three library-internal helper
+traits (`FromJsonFields`, `FromJsonArgs`, `FromVariantPayload`) added to
+`lib/Decode.saga` alongside the existing function-based decoder
+primitives. All 12 building-block impls implemented mirroring Encode's 12. Layer-3 helpers `deserialize`, `deserialize_with`, `derive_from_with`,
+`refine` exported. `apply_name_style` + helpers moved to root
+`lib/SagaJson.saga` so both directions share them. 170 tests passing
+(151 baseline + 19 new in `tests/FromJsonTest.saga`).
+
+What shipped:
+
+- `pub trait FromJson a` with two-method shape (`from_json_with` +
+  default-bodied `from_json`). Default body fully-qualifies
+  `SagaJson.default_options` per the Phase 5 trait-default-scoping
+  workaround.
+- `FromJsonFields` is lookup-based: each `Labeled n a` impl independently
+  reflects its symbol via `KnownSymbol`, applies `apply_name_style`, and
+  looks up the resulting key in the input field list. `And` for
+  `FromJsonFields` runs both sides against the same input list.
+  Missing-field failures land naturally at the `Labeled` level.
+- `FromJsonArgs` is positional with returned residue: `Leaf` consumes one
+  item from the head of the list; `And` chains via the residue.
+- `FromVariantPayload` dispatches by Json shape: `U1` ← `VNull`, `Leaf` ←
+  single value, `And-of-args` ← `VArray` unfolded via `FromJsonArgs`.
+- `Variant n a`'s `FromJson` impl reflects the expected symbol, applies
+  `rename_all`, and decodes per `TagFormat` (Externally / Adjacently /
+  Internally / Untagged). `Or`'s try-left-fall-back-to-right impl walks
+  the variant chain correctly because tag mismatches genuinely fail.
+- `refine` is a one-liner that post-applies an invariant check on a
+  decoder's output. Tested with a `User { age: Int }` + `age >= 0`
+  invariant.
+- `Options` stays unified (no `EncodeOptions`/`DecodeOptions` split).
+  `omit_nothing` is encode-only — documented on the docstring.
+- `lib/Encode.saga` untouched apart from the helper-import shuffle.
+  `lib/Parser.saga` untouched. The function-based `parse` / `run` API
+  stays for ad-hoc decoders.
+
+Tests in [tests/FromJsonTest.saga](../../../tests/FromJsonTest.saga)
+cover: primitive/container round-trips, flat & nested derived records
+(Coords, Address, User), the headline sum-type case (Role: every
+variant round-trips, proving the Symbol-based `Variant` impl
+discriminates), unit/single-arg/multi-arg ADT (Shape), Options symmetry
+(rename_all: CamelCase encodes and decodes), tag-mismatch failure,
+missing-field failure, wrong-typed field failure, and the `refine`
+happy path + failure path. [src/Main.saga](../../../src/Main.saga)
+gains a derived round-trip demo on `Account` via `deserialize`.
+
+Compiler bugs surfaced and filed in
+`/home/dylan/projects/saga/examples/bugs/effectful-trait-self-dispatch/`
+(all fixed mid-phase; tracked here for context):
+
+1. **Trait method declared with `needs {Fail Err}` lost its effect on
+   recursive trait dispatch.** A building-block impl that called the same
+   trait method on a sub-component compiled, but at runtime hit
+   `function called with N arguments, but expects N+1` because the
+   handler arg wasn't threaded through the recursive call. Affected
+   every `Leaf`/`Labeled`/`And`/`Or` impl in `FromJson`. Fixed.
+2. **Compiler-synthesized impls from `deriving (FromJson)` didn't carry
+   `needs {Fail Error}`.** Synthesis copies the trait method shape but
+   omitted the effect row, so the synthesized bridge for any
+   `record/type T deriving (FromJson)` failed elaboration with "uses
+   effects but has no 'needs' declaration." Fixed.
+3. **Cross-trait dispatch from inside a `with { fail ... = ... }`
+   handler body that closes over a let-bound `symbol_name`-derived
+   value.** Hit the same `function called with N, expects N+1` PANIC.
+   Inlining a literal where the handler used the let binding made the
+   same impl work, isolating the trigger to the let-capture path.
+   Affected `FromJsonFields for Labeled` (every derived record decode).
+   Fixed.
+
+Saga gotchas surfaced (worth carrying forward):
+
+- **Effectful trait methods need `needs {…}` on both the trait
+  declaration and each impl head.** The trait declaration's `needs`
+  describes the method's signature; the impl head's `needs` describes
+  what the impl body actually uses. They have to align.
+
+---
+
+## Phase 6 (original spec — preserved for historical context)
 
 **Goal:** Symmetric decode path. Reuse `Options` knobs (the same `rename_all`, `tag_format`, etc. apply in reverse). Add post-process `refine` for decoders to handle invariants the schema can't express. Sum-type decoding is correct because Phase 5's Symbol migration made `Variant n a` discriminable by `n`.
 

@@ -11,7 +11,16 @@ import Std.Fail (Fail)
 import Std.Int
 import Std.List
 import Std.String
-import SagaJson (Json, Error, from_value, to_value, NameStyle, TagFormat, Options)
+import SagaJson (
+  Json,
+  Error,
+  from_value,
+  to_value,
+  NameStyle,
+  TagFormat,
+  Options,
+  apply_name_style
+)
 import SagaJson as J
 import SagaJson.Parser (Value)
 
@@ -103,37 +112,6 @@ unicode_escape c = {
   BS.from_string $"\\u00{padded}"
 }
 
-# --- Name-style helpers ---
-#
-# Source names are the source identifier as written in Saga source —
-# reflected via `KnownSymbol`/`symbol_name` from the type-level Symbol
-# on `Labeled` and `Variant`. Saga style is snake_case, so the
-# transformers below assume a snake_case input. `apply_name_style` is
-# the canonical encode-side step; Phase 6's FromJson will apply the
-# same transform symmetrically to derive the expected input key.
-
-fun apply_name_style : NameStyle -> String -> String
-apply_name_style ns s = case ns {
-  AsIs -> s
-  SnakeCase -> s
-  CamelCase -> snake_to_camel s
-  KebabCase -> String.replace_all "_" "-" s
-  ScreamingSnakeCase -> String.to_upper s
-}
-
-fun snake_to_camel : String -> String
-snake_to_camel s = case String.split "_" s {
-  [] -> s
-  h :: rest -> h <> String.join "" (List.map capitalize rest)
-}
-
-fun capitalize : String -> String
-capitalize s = {
-  let n = String.length s
-  if n == 0 then s
-  else String.to_upper (String.slice 0 1 s) <> String.slice 1 (n - 1) s
-}
-
 # --- ToJson trait + helpers ---
 #
 # The public `ToJson` trait has the two-method shape from
@@ -141,11 +119,11 @@ capitalize s = {
 # `to_json_with`; the default body for `to_json` forwards through
 # `default_options`. Hand-written user impls only need `to_json_with`.
 #
-# Three additional traits — `ToJsonFields`, `ToJsonArgs`, `VariantPayload` —
+# Three additional traits (`ToJsonFields`, `ToJsonArgs`, `VariantPayload`)
 # are library-internal and handle the three syntactic positions a Rep can
-# occupy (record interior, variant arg list, variant payload). Splitting
-# them gives compile-time non-overlap; see `docs/planning/serialization.md`
-# section "Why four traits".
+# occupy: record interior, variant arg list, variant payload. Splitting
+# them gives compile-time non-overlap. See the "Why four traits" section
+# in `docs/planning/serialization.md`.
 
 #@ Types that can be encoded as JSON. Hand-write `to_json_with` for your
 #@ own records and ADTs (the `to_json` convenience is inherited from the
@@ -206,11 +184,10 @@ impl ToJson for Maybe a where {a: ToJson} {
 # --- Building-block impls for the Generic Rep ---
 #
 # Twelve impls across four traits. Some Rep types appear in multiple
-# syntactic positions and therefore implement multiple helper traits —
-# `Leaf a` participates in three. The traits are disjoint, so there is
-# no overlap.
+# syntactic positions and so implement multiple helper traits (`Leaf a`
+# participates in three). The traits are disjoint so there's no overlap.
 
-# ToJson — assembles complete Json values. Leaf-as-ToJson is the
+# ToJson assembles complete Json values. The Leaf-as-ToJson impl is the
 # passthrough used when a leaf sits inside a Labeled in a record field.
 impl ToJson for Leaf a where {a: ToJson} {
   to_json_with opts (Leaf x) = to_json_with opts x
@@ -246,8 +223,8 @@ impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload}
 }
 
 # Merge the tag field into a payload's object body. `null` payloads emit
-# just the tag; primitive / array payloads (which can't carry an extra
-# key) fall back to the externally-tagged form.
+# just the tag. Primitive and array payloads can't carry an extra key, so
+# they fall back to the externally-tagged form.
 fun tag_internally : String -> String -> Json -> Json
 tag_internally tag_field name payload = case to_value payload {
   VNull -> object [(tag_field, string name)]
@@ -259,7 +236,7 @@ impl ToJson for Adt a where {a: ToJson} {
   to_json_with opts (Adt _ inner) = to_json_with opts inner
 }
 
-# ToJsonFields — record-interior dispatch.
+# ToJsonFields: record-interior dispatch.
 impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
   to_fields opts (Labeled x) = {
     let name = symbol_name (Proxy : Proxy n)
@@ -271,7 +248,7 @@ impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {
   to_fields opts (And l r) = List.append (to_fields opts l) (to_fields opts r)
 }
 
-# ToJsonArgs — variant-arg-list dispatch.
+# ToJsonArgs: variant-arg-list dispatch.
 impl ToJsonArgs for Leaf a where {a: ToJson} {
   to_args opts (Leaf x) = [to_json_with opts x]
 }
@@ -280,8 +257,8 @@ impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
   to_args opts (And l r) = List.append (to_args opts l) (to_args opts r)
 }
 
-# VariantPayload — by arity. U1 → null, Leaf → unwrapped value, And-of-args
-# → JSON array.
+# VariantPayload: dispatch by arity. U1 emits null, Leaf emits the
+# unwrapped value, And-of-args emits a JSON array.
 impl VariantPayload for U1 {
   payload_json _ _ = null
 }
@@ -296,12 +273,12 @@ impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
   }
 }
 
-# `omit_nothing` is implemented post-hoc on the produced fields. The
-# building-block impls don't know a field's source type, only its
-# rendered Json — a Maybe Nothing has already become `null` by the time
-# Record assembles fields, so we filter null values out. A user impl
+# `omit_nothing` is applied after the fact, on the produced fields. The
+# building-block impls don't know a field's source type, only its rendered
+# Json: a `Maybe Nothing` has already become `null` by the time `Record`
+# assembles its fields, so we just filter null values out. A user impl
 # that deliberately emits `null` for a non-Maybe field will also be
-# dropped under `omit_nothing: True`; documented limitation.
+# dropped under `omit_nothing: True`. This is a documented limitation.
 fun drop_null_fields : List (String, Json) -> List (String, Json)
 drop_null_fields pairs = List.filter not_null_pair pairs
 
@@ -323,18 +300,18 @@ serialize x = render (to_json x)
 pub fun serialize_with : Options -> a -> String where {a: ToJson}
 serialize_with opts x = render (to_json_with opts x)
 
-#@ The derive-then-tweak escape hatch. Calls the Generic-derived encoding
+#@ Derive-then-tweak escape hatch. Calls the Generic-derived encoding
 #@ explicitly, so a hand-written `impl ToJson` can start from the derived
 #@ shape and post-process. Without this, the trait dispatch can't reach
-#@ the derived impl — the hand-written impl shadows it.
+#@ the derived impl, since the hand-written impl shadows it.
 pub fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
 derive_with opts x = to_json_with opts (to x)
 
 # --- Post-process combinators ---
 #
-# Single-level transformations on a Json object. Compose with `|>`; nest by
-# passing a lambda that operates on the inner Json. All five operate on
-# VObject only — non-object input fails with InvalidShape.
+# Single-level transformations on a Json object. Compose with `|>` and
+# nest by passing a lambda that operates on the inner Json. All five
+# operate on VObject only; non-object input fails with InvalidShape.
 #
 # update_field / rename_field / remove_field fail loudly if the key is
 # missing. insert_field fails if the key already exists (use update_field

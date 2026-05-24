@@ -7,6 +7,8 @@ module SagaJson
 
 import Std.Base (Debug, Eq)
 import Std.Fail (Fail)
+import Std.List
+import Std.String
 import SagaJson.Parser (Value)
 
 #@ A JSON value. Opaque so the internal representation can evolve.
@@ -107,6 +109,37 @@ pub val default_options = Options {
   tag_format: ExternallyTagged,
   tag_field: "tag",
   content_field: "content",
+}
+
+# --- Name-style helpers ---
+#
+# Library-internal. Both encode and decode apply this transform to the
+# source identifier reflected via `symbol_name`, giving symmetric
+# `rename_all` semantics in both directions.
+
+#@ Apply a NameStyle transform to a Saga source identifier (snake_case
+#@ by convention). Library-internal; called by both the encoder and the
+#@ decoder so a single Options value drives a symmetric round-trip.
+pub fun apply_name_style : NameStyle -> String -> String
+apply_name_style ns s = case ns {
+  AsIs -> s
+  SnakeCase -> s
+  CamelCase -> snake_to_camel s
+  KebabCase -> String.replace_all "_" "-" s
+  ScreamingSnakeCase -> String.to_upper s
+}
+
+fun snake_to_camel : String -> String
+snake_to_camel s = case String.split "_" s {
+  [] -> s
+  h :: rest -> h <> String.join "" (List.map capitalize rest)
+}
+
+fun capitalize : String -> String
+capitalize s = {
+  let n = String.length s
+  if n == 0 then s
+  else String.to_upper (String.slice 0 1 s) <> String.slice 1 (n - 1) s
 }
 
 #@ Parse a JSON string into a Json value, without applying a decoder.
