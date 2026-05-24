@@ -19,6 +19,7 @@ import SagaJson (
   NameStyle,
   TagFormat,
   Options,
+  WithOptions,
   apply_name_style
 )
 import SagaJson as J
@@ -576,4 +577,38 @@ pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) 
 map_object f j = {
   let pairs = expect_object j
   from_value (VObject (do_map_object f pairs))
+}
+
+# --- Fluent encoder builder ---
+#
+# `encoder x` wraps a value with `default_options`, then a chain of
+# `WithOptions` setters (`rename_keys`, `omit_nothing`, ...) adjusts
+# the options. The `ToJson` impl for `Encoder a` substitutes the
+# accumulated options when the chain lands on `to_json` / `serialize`,
+# so the builder collapses naturally through trait dispatch.
+
+#@ A typed value paired with the Options that should drive its
+#@ encoding. Build with `encoder` or `encode_with`, refine with the
+#@ `WithOptions` setters, then collapse via `to_json` or `serialize`.
+pub record Encoder a {
+  value: a,
+  options: Options,
+}
+
+#@ Wrap a value with `default_options`. The head of a fluent encode
+#@ chain: `value |> encoder |> rename_keys CamelCase |> serialize`.
+pub fun encoder : a -> Encoder a where {a: ToJson}
+encoder x = Encoder { value: x, options: SagaJson.default_options }
+
+#@ Wrap a value with a pre-built Options record. The shortcut when
+#@ you already have an Options value you want to reuse.
+pub fun encode_with : a -> Options -> Encoder a where {a: ToJson}
+encode_with x opts = Encoder { value: x, options: opts }
+
+impl WithOptions for Encoder a where {a: ToJson} {
+  map_options f e = Encoder { value: e.value, options: f e.options }
+}
+
+impl ToJson for Encoder a where {a: ToJson} {
+  to_json_with _ e = to_json_with e.options e.value
 }

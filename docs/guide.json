@@ -1,0 +1,34 @@
+{
+  "sections": [
+    {
+      "slug": "getting-started",
+      "title": "Getting started",
+      "description": "Install, first encode, first decode.",
+      "group": "guide"
+    },
+    {
+      "slug": "encoding",
+      "title": "Encoding",
+      "description": "Hand-written impls, deriving (ToJson), serialize, derive_with.",
+      "group": "guide"
+    },
+    {
+      "slug": "decoding",
+      "title": "Decoding",
+      "description": "Hand-written decoders, deriving (FromJson), deserialize, error handling.",
+      "group": "guide"
+    },
+    {
+      "slug": "customization",
+      "title": "Customization",
+      "description": "Options, ADT tag formats, key renaming, the fluent Encoder/Decoder builder, and the as_enum/as_tagged strategies.",
+      "group": "guide"
+    },
+    {
+      "slug": "post-processing",
+      "title": "Post-processing",
+      "description": "update_field, rename_field, map_object, and the other Json transform combinators.",
+      "group": "guide"
+    }
+  ]
+}

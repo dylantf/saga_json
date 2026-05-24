@@ -118,6 +118,51 @@ pub val default_options = Options {
   unit_variants_as_strings: True,
 }
 
+# --- Fluent options builder ---
+#
+# The `WithOptions` trait + free-function setters give both the encode-
+# and decode-side builders (`Encoder a`, `Decoder`) a shared fluent
+# vocabulary: `value |> encoder |> rename_keys CamelCase |> ...`. Each
+# setter returns a new builder of the same type with one Options field
+# adjusted. The trait method `map_options` is the only thing
+# library-internal callers need to impl.
+
+#@ Types that carry an `Options` value internally and let you adjust it
+#@ functionally. Implemented by `SagaJson.Encode.Encoder` and
+#@ `SagaJson.Decode.Decoder`. The free-function setters
+#@ (`rename_keys`, `tag_format`, ...) are written against this trait
+#@ so they work on both builders.
+pub trait WithOptions a {
+  fun map_options : (Options -> Options) -> a -> a
+}
+
+#@ Set the `rename_all` field on the builder's Options.
+pub fun rename_keys : NameStyle -> a -> a where {a: WithOptions}
+rename_keys ns x = map_options (fun o -> { o | rename_all: ns }) x
+
+#@ Set `omit_nothing: True` on the builder's Options. Encode-only;
+#@ no-op on the decode side.
+pub fun omit_nothing : a -> a where {a: WithOptions}
+omit_nothing x = map_options (fun o -> { o | omit_nothing: True }) x
+
+#@ Set the `tag_format` field on the builder's Options.
+pub fun with_tag_format : TagFormat -> a -> a where {a: WithOptions}
+with_tag_format tf x = map_options (fun o -> { o | tag_format: tf }) x
+
+#@ Set the `tag_field` name (used by AdjacentlyTagged / InternallyTagged).
+pub fun with_tag_field : String -> a -> a where {a: WithOptions}
+with_tag_field name x = map_options (fun o -> { o | tag_field: name }) x
+
+#@ Set the `content_field` name (used by AdjacentlyTagged).
+pub fun with_content_field : String -> a -> a where {a: WithOptions}
+with_content_field name x = map_options (fun o -> { o | content_field: name }) x
+
+#@ Set the `unit_variants_as_strings` field. Pass False to recover the
+#@ legacy `{"Admin": null}` wrapped shape; True is the default.
+pub fun with_unit_variants_as_strings : Bool -> a -> a where {a: WithOptions}
+with_unit_variants_as_strings b x =
+  map_options (fun o -> { o | unit_variants_as_strings: b }) x
+
 # --- Name-style helpers ---
 #
 # Library-internal. Both encode and decode apply this transform to the

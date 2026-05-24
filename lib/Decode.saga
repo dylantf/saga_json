@@ -15,6 +15,7 @@ import SagaJson (
   to_value,
   from_value,
   Options,
+  WithOptions,
   apply_name_style,
   ExternallyTagged,
   AdjacentlyTagged,
@@ -618,3 +619,39 @@ as_tagged_from opts j =
 pub fun refine : (a -> a needs {Fail Error}) -> (Json -> a needs {Fail Error}) -> Json -> a
   needs {Fail Error}
 refine invariant decoder j = invariant (decoder j)
+
+# --- Fluent decoder builder ---
+#
+# Mirror of `Encoder` on the encode side. `decoder s` wraps an input
+# String with `default_options`, the `WithOptions` setters adjust the
+# accumulated options, and `decode` collapses the builder via
+# `deserialize_with`. The target type is picked by the usual
+# `Result a Error` annotation at the call site.
+
+#@ An input JSON string paired with the Options that should drive its
+#@ decoding. Build with `decoder` or `decode_with`, refine with the
+#@ `WithOptions` setters, then collapse via `decode`.
+pub record Decoder {
+  input: String,
+  options: Options,
+}
+
+#@ Wrap an input string with `default_options`. The head of a fluent
+#@ decode chain: `input |> decoder |> rename_keys CamelCase |> decode`.
+pub fun decoder : String -> Decoder
+decoder s = Decoder { input: s, options: SagaJson.default_options }
+
+#@ Wrap an input string with a pre-built Options record. The shortcut
+#@ when you already have an Options value you want to reuse.
+pub fun decode_with : String -> Options -> Decoder
+decode_with s opts = Decoder { input: s, options: opts }
+
+impl WithOptions for Decoder {
+  map_options f d = Decoder { input: d.input, options: f d.options }
+}
+
+#@ Collapse a `Decoder` builder: parse its input and run the derived
+#@ `FromJson` decoder using the builder's accumulated Options. The
+#@ target type is picked by the result-type annotation at the call site.
+pub fun decode : Decoder -> Result a Error where {a: FromJson}
+decode d = deserialize_with d.options d.input

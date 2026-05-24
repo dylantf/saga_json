@@ -1,6 +1,7 @@
 module ToJsonTest
 
 import Std.Test (Testing, Test, describe, test, assert_eq)
+import SagaJson as J (default_options, CamelCase)
 import SagaJson.Encode as E (ToJson, serialize)
 
 # A small record + ADT-shaped wrapper to exercise hand-written impls without
@@ -24,6 +25,14 @@ record Polyline {
   pts: List Point,
   label: Maybe String,
 }
+
+# Derived record used to exercise Options-driven encoding from the
+# fluent Encoder builder. Keep it minimal: snake_case fields for
+# rename_keys and a Maybe field for omit_nothing.
+record DerivedRow {
+  first_name: String,
+  detail: Maybe String,
+} deriving (Debug, ToJson)
 
 impl ToJson for Polyline {
   to_json_with _ pl = E.object [
@@ -114,6 +123,32 @@ tests () = {
             label: Nothing
           }))
           "{\"name\":\"e\",\"closed\":true,\"pts\":[],\"label\":null}")
+    })
+
+    describe "fluent Encoder builder" (fun () -> {
+      test "encoder + serialize matches plain serialize on a derived type" (fun () -> {
+        let r = DerivedRow { first_name: "Ada", detail: Just "x" }
+        assert_eq (r |> E.encoder |> serialize) (serialize r)
+      })
+
+      test "rename_keys CamelCase emits camelCase keys" (fun () -> {
+        let r = DerivedRow { first_name: "Ada", detail: Just "x" }
+        let got = r |> E.encoder |> J.rename_keys CamelCase |> serialize
+        assert_eq got "{\"firstName\":\"Ada\",\"detail\":\"x\"}"
+      })
+
+      test "omit_nothing drops Nothing-valued fields" (fun () -> {
+        let r = DerivedRow { first_name: "Ada", detail: Nothing }
+        let got = r |> E.encoder |> J.omit_nothing |> serialize
+        assert_eq got "{\"first_name\":\"Ada\"}"
+      })
+
+      test "encode_with reuses a prebuilt Options" (fun () -> {
+        let opts = { default_options | omit_nothing: True }
+        let r = DerivedRow { first_name: "Ada", detail: Nothing }
+        let got = serialize (E.encode_with r opts)
+        assert_eq got "{\"first_name\":\"Ada\"}"
+      })
     })
   })
 }

@@ -66,6 +66,13 @@ record Person {
   age: Int,
 } deriving (Debug, Eq, ToJson, FromJson)
 
+# For the fluent Decoder builder tests: snake_case fields decoded from
+# camelCase input via `rename_keys CamelCase`.
+record CamelUser {
+  first_name: String,
+  last_name: String,
+} deriving (Debug, Eq, ToJson, FromJson)
+
 # Helpers
 fun sample_user : Unit -> User
 sample_user () = User {
@@ -281,6 +288,31 @@ tests () = {
       test "wrong-typed field on Person surfaces Fail Error" (fun () ->
         assert_err
           (deserialize "{\"name\":\"Alice\",\"age\":\"thirty\"}" : Result Person J.Error))
+    })
+
+    describe "fluent Decoder builder" (fun () -> {
+      test "decoder + decode round-trips with default options" (fun () -> {
+        let input = serialize (Person { name: "Ada", age: 30 })
+        let got = input |> D.decoder |> D.decode : Result Person J.Error
+        assert_eq got (Ok (Person { name: "Ada", age: 30 }))
+      })
+
+      test "rename_keys CamelCase decodes camelCase input into snake_case fields" (fun () -> {
+        let input = """{"firstName":"Ada","lastName":"Lovelace"}"""
+        let got =
+          input
+          |> D.decoder
+          |> J.rename_keys CamelCase
+          |> D.decode : Result CamelUser J.Error
+        assert_eq got (Ok (CamelUser { first_name: "Ada", last_name: "Lovelace" }))
+      })
+
+      test "decode_with reuses a prebuilt Options" (fun () -> {
+        let opts = { default_options | rename_all: CamelCase }
+        let input = """{"firstName":"Ada","lastName":"Lovelace"}"""
+        let got = D.decode (D.decode_with input opts) : Result CamelUser J.Error
+        assert_eq got (Ok (CamelUser { first_name: "Ada", last_name: "Lovelace" }))
+      })
     })
 
     describe "refine" (fun () -> {
