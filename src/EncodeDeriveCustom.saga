@@ -1,0 +1,62 @@
+#@ Encoding with `deriving (ToJson)` plus customization via Options.
+#@
+#@ Same Options shape as decoding — round-trip works when both sides use
+#@ the same Options. Useful for matching foreign API conventions:
+#@ camelCase keys, adjacent tagging, or omitting absent fields entirely.
+module EncodeDeriveCustom
+
+import SagaJson as J (
+  Options,
+  default_options,
+  CamelCase,
+  AdjacentlyTagged,
+)
+import SagaJson.Encode as E (ToJson, serialize_with)
+
+record User {
+  first_name: String,
+  last_name: String,
+} deriving (Debug, ToJson)
+
+type Status =
+  | Active
+  | Pending
+  | Closed
+  deriving (Debug, ToJson)
+
+record Notification {
+  message: String,
+  details: Maybe String,
+} deriving (Debug, ToJson)
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Encoding by derive with customization ==="
+
+  # rename_all: emit camelCase keys for snake_case fields.
+  let camel_opts = { default_options | rename_all: CamelCase }
+  dbg (E.serialize_with camel_opts (User {
+    first_name: "Ada",
+    last_name: "Lovelace",
+  }))
+
+  # tag_format: emit adjacently-tagged ADT variants instead of the
+  # default external tag.
+  let adjacent_opts = { default_options |
+    tag_format: AdjacentlyTagged,
+    tag_field: "tag",
+    content_field: "value",
+  }
+  dbg (E.serialize_with adjacent_opts Active)
+
+  # omit_nothing: drop `Nothing`-valued `Maybe` fields from the output.
+  # Warning: the resulting JSON does NOT round-trip through
+  # `deserialize_with` on the same Options — the decoder treats a
+  # missing field as an error because it can't see that the target
+  # field's type is a `Maybe` that would accept absence as `Nothing`.
+  let omit_opts = { default_options | omit_nothing: True }
+  dbg (E.serialize_with omit_opts (Notification {
+    message: "hello",
+    details: Nothing,
+  }))
+}

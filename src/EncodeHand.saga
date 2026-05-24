@@ -1,0 +1,32 @@
+#@ Encoding Saga types into JSON by writing `impl ToJson` by hand.
+#@
+#@ Use this when you want full control over the output shape — custom
+#@ key names, computed fields, or any JSON layout that doesn't match the
+#@ type definition. Build the `Json` value with `E.object`, `E.string`,
+#@ etc., or compose by calling `to_json` on nested fields.
+module EncodeHand
+
+import SagaJson.Encode as E (ToJson, serialize)
+
+record Person {
+  name: String,
+  age: Int,
+}
+
+# `to_json_with` is the method that takes Options + value and produces
+# Json. The `_` ignores Options since we hard-code the shape. Inside the
+# body, `to_json p.name` dispatches to the String impl, `to_json p.age`
+# to the Int impl, etc.
+impl ToJson for Person {
+  to_json_with _ p = E.object [
+    ("name", to_json p.name),
+    ("age", to_json p.age),
+  ]
+}
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Encoding by hand ==="
+  let p = Person { name: "Alice", age: 30 }
+  dbg (serialize p)
+}

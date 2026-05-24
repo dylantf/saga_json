@@ -1,0 +1,45 @@
+#@ Decoding JSON into Saga types using `deriving (FromJson)`.
+#@
+#@ For records and ADTs whose JSON shape matches the type definition,
+#@ derive `FromJson` on the type and call `deserialize` to go straight
+#@ from String to your typed value. No per-field code to write.
+module DecodeDerive
+
+import SagaJson as J
+import SagaJson.Decode as D (FromJson, deserialize)
+
+record Person {
+  name: String,
+  age: Int,
+} deriving (Debug, FromJson)
+
+# ADTs derive the same way. By default, constructors are externally
+# tagged: `{"VariantName": payload}`. For a unit constructor like
+# `Admin`, the payload is `null`.
+type Role =
+  | Admin
+  | Editor
+  | Viewer
+  deriving (Debug, FromJson)
+
+# Records can hold derived ADTs (and other records) as fields. Anything
+# in the field type that derives `FromJson` composes automatically.
+record Account {
+  person: Person,
+  role: Role,
+} deriving (Debug, FromJson)
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Decoding by derive ==="
+
+  let person_json = """{"name":"Alice","age":30}"""
+  dbg (deserialize person_json : Result Person J.Error)
+
+  let role_json = """{"Admin":null}"""
+  dbg (deserialize role_json : Result Role J.Error)
+
+  let account_json =
+    """{"person":{"name":"Alice","age":30},"role":{"Editor":null}}"""
+  dbg (deserialize account_json : Result Account J.Error)
+}
