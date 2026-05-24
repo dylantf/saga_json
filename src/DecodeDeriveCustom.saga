@@ -12,7 +12,7 @@ import SagaJson as J (
   CamelCase,
   AdjacentlyTagged,
 )
-import SagaJson.Decode as D (FromJson, deserialize_with)
+import SagaJson.Decode as D (FromJson, deserialize_with, as_enum_from, as_tagged_from)
 
 # Saga fields are snake_case. With `rename_all: CamelCase` we tell the
 # decoder to look up camelCase keys in the input instead.
@@ -45,4 +45,19 @@ run () = {
   }
   let adjacent_input = """{"tag":"Active","value":null}"""
   dbg (deserialize_with adjacent_opts adjacent_input : Result Status J.Error)
+
+  # as_enum_from: bare-string variant decoding. Routes through the
+  # default externally-tagged path with `unit_variants_as_strings: True`,
+  # so both `"Active"` and `{"Active":null}` (legacy) decode the same
+  # value. Mirror of `SagaJson.Encode.as_enum`.
+  let enum_input = "\"Pending\""
+  let enum_dec = fun jj -> (as_enum_from default_options jj : Status)
+  dbg (J.parse enum_dec enum_input)
+
+  # as_tagged_from: force the legacy wrapped form. Useful for decoding
+  # JSON produced before the default refinement, or by encoders that
+  # always wrap unit variants.
+  let tagged_input = "{\"Closed\":null}"
+  let tagged_dec = fun jj -> (as_tagged_from default_options jj : Status)
+  dbg (J.parse tagged_dec tagged_input)
 }

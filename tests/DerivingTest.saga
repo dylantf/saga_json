@@ -16,7 +16,7 @@ import SagaJson as J (
   InternallyTagged,
   Untagged,
 )
-import SagaJson.Encode as E (ToJson, serialize, serialize_with)
+import SagaJson.Encode as E (ToJson, serialize, serialize_with, as_enum, as_tagged)
 
 # --- Types under test ---
 
@@ -98,8 +98,8 @@ tests () = {
     })
 
     describe "derived ADTs (externally tagged)" (fun () -> {
-      test "unit variant -> {\"Triangle\":null}" (fun () ->
-        assert_eq (serialize Triangle) "{\"Triangle\":null}")
+      test "unit variant -> bare string" (fun () ->
+        assert_eq (serialize Triangle) "\"Triangle\"")
 
       test "single-arg variant unwraps payload" (fun () ->
         assert_eq (serialize (Circle 7)) "{\"Circle\":7}")
@@ -110,7 +110,7 @@ tests () = {
       test "recursive type round-trips through the trait dict" (fun () ->
         assert_eq
           (serialize (ICons 1 (ICons 2 (ICons 3 INil))))
-          "{\"ICons\":[1,{\"ICons\":[2,{\"ICons\":[3,{\"INil\":null}]}]}]}")
+          "{\"ICons\":[1,{\"ICons\":[2,{\"ICons\":[3,\"INil\"]}]}]}")
     })
 
     describe "Options-threading" (fun () -> {
@@ -251,6 +251,51 @@ tests () = {
         assert_eq
           (serialize_with (with_tag_format Untagged) (Rect 3 4))
           "[3,4]")
+    })
+
+    describe "unit-variant default (bare string)" (fun () -> {
+      test "Triangle emits bare string under defaults" (fun () ->
+        assert_eq (serialize Triangle) "\"Triangle\"")
+
+      test "Circle (single-arg) still wraps" (fun () ->
+        assert_eq (serialize (Circle 7)) "{\"Circle\":7}")
+
+      test "Rect (multi-arg) still wraps as array" (fun () ->
+        assert_eq (serialize (Rect 3 4)) "{\"Rect\":[3,4]}")
+
+      test "unit_variants_as_strings: False recovers legacy shape" (fun () -> {
+        let opts = { default_options | unit_variants_as_strings: False }
+        assert_eq (serialize_with opts Triangle) "{\"Triangle\":null}"
+      })
+
+      test "unit_variants_as_strings respects rename_all" (fun () -> {
+        let opts = { default_options | rename_all: ScreamingSnakeCase }
+        assert_eq (serialize_with opts Triangle) "\"TRIANGLE\""
+      })
+    })
+
+    describe "as_enum / as_tagged strategies" (fun () -> {
+      test "as_enum emits bare string for unit variant" (fun () ->
+        assert_eq (E.render (as_enum default_options NoOp)) "\"NoOp\"")
+
+      test "as_enum drops payload on single-arg variant" (fun () ->
+        assert_eq (E.render (as_enum default_options (Bare 9))) "\"Bare\"")
+
+      test "as_enum drops record payload on single-arg variant" (fun () ->
+        assert_eq
+          (E.render (as_enum default_options (WrapIt (Payload { x: 1, y: 2 }))))
+          "\"WrapIt\"")
+
+      test "as_enum honors rename_all (already-bare unit variant)" (fun () -> {
+        let opts = { default_options | rename_all: ScreamingSnakeCase }
+        assert_eq (E.render (as_enum opts NoOp)) "\"NOOP\""
+      })
+
+      test "as_tagged emits wrapped form on unit variant" (fun () ->
+        assert_eq (E.render (as_tagged default_options NoOp)) "{\"NoOp\":null}")
+
+      test "as_tagged leaves payload-bearing variants alone" (fun () ->
+        assert_eq (E.render (as_tagged default_options (Bare 9))) "{\"Bare\":9}")
     })
 
     describe "byte-for-byte match with hand-written" (fun () -> {

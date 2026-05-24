@@ -148,8 +148,12 @@ trait ToJsonArgs a {
 
 # Library-internal: produces the payload Json that follows the variant
 # name in `{name: payload}` (or whatever the active TagFormat dictates).
+# `is_unit_payload` is used by `Variant`'s ExternallyTagged branch to
+# decide whether to emit the variant as a bare string (`"Admin"`) or
+# the wrapped form (`{"Admin": null}`).
 trait VariantPayload a {
   fun payload_json : Options -> a -> Json
+  fun is_unit_payload : a -> Bool
 }
 
 # --- Primitive + container impls (ToJson) ---
@@ -213,7 +217,10 @@ impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload}
     let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
     let p = payload_json opts payload
     case opts.tag_format {
-      ExternallyTagged -> object [(name, p)]
+      ExternallyTagged ->
+        if opts.unit_variants_as_strings && is_unit_payload payload
+        then string name
+        else object [(name, p)]
       AdjacentlyTagged ->
         object [(opts.tag_field, string name), (opts.content_field, p)]
       Untagged -> p
@@ -261,16 +268,19 @@ impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
 # unwrapped value, And-of-args emits a JSON array.
 impl VariantPayload for U1 {
   payload_json _ _ = null
+  is_unit_payload _ = True
 }
 
 impl VariantPayload for Leaf a where {a: ToJson} {
   payload_json opts (Leaf x) = to_json_with opts x
+  is_unit_payload _ = False
 }
 
 impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
   payload_json opts v = case v {
     And l r -> array (List.append (to_args opts l) (to_args opts r))
   }
+  is_unit_payload _ = False
 }
 
 # `omit_nothing` is applied after the fact, on the produced fields. The
@@ -306,6 +316,33 @@ serialize_with opts x = render (to_json_with opts x)
 #@ the derived impl, since the hand-written impl shadows it.
 pub fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
 derive_with opts x = to_json_with opts (to x)
+
+#@ Encoding strategy: emit every variant as a bare JSON string of its
+#@ tag name (e.g. `"Admin"`), dropping any payload data. Lossy by
+#@ design — `Elevated 123` encodes to `"Elevated"`, discarding `123`.
+#@ Useful when a downstream system only cares about the tag (logging,
+#@ analytics, JSON shape compatibility with a foreign enum).
+#@
+#@ The symmetric decoder `SagaJson.Decode.as_enum_from` round-trips
+#@ unit variants but fails on payload-bearing ones — there's no payload
+#@ data in `"Elevated"` to reconstruct from.
+pub fun as_enum : Options -> a -> Json where {a: ToJson}
+as_enum opts x = case to_value (to_json_with opts x) {
+  VString _ -> to_json_with opts x
+  VObject pairs -> case pairs {
+    (name, _) :: _ -> string name
+    [] -> to_json_with opts x
+  }
+  _ -> to_json_with opts x
+}
+
+#@ Encoding strategy: force the externally-tagged `{"Variant": payload}`
+#@ shape for unit variants too. Recovers the pre-default-refinement
+#@ behavior of `{"Admin": null}`. Drives the encode through
+#@ `unit_variants_as_strings: False` regardless of the caller's Options.
+pub fun as_tagged : Options -> a -> Json where {a: ToJson}
+as_tagged opts x =
+  to_json_with { opts | unit_variants_as_strings: False } x
 
 # --- Post-process combinators ---
 #

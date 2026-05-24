@@ -73,7 +73,9 @@ pub type NameStyle =
 
 #@ How sum-type variants are tagged in JSON.
 #@
-#@ - `ExternallyTagged` (default): `{"Variant": payload}`.
+#@ - `ExternallyTagged` (default): `{"Variant": payload}` for variants
+#@    that carry a payload; unit variants emit as bare strings
+#@    (`"Admin"`) when `unit_variants_as_strings` is True (the default).
 #@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
 #@    both fields always emitted, including for unit (U1) variants where
 #@    `content_field` carries `null`.
@@ -99,16 +101,21 @@ pub record Options {
   tag_format: TagFormat,
   tag_field: String,
   content_field: String,
+  unit_variants_as_strings: Bool,
 }
 
 #@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
-#@ externally-tagged sums.
+#@ externally-tagged sums with unit variants emitted as bare strings
+#@ (matching serde, kotlinx.serialization, and most other modern JSON
+#@ libraries). Set `unit_variants_as_strings: False` to recover the
+#@ legacy `{"Admin": null}` shape (or use the `as_tagged` strategy).
 pub val default_options = Options {
   rename_all: AsIs,
   omit_nothing: False,
   tag_format: ExternallyTagged,
   tag_field: "tag",
   content_field: "content",
+  unit_variants_as_strings: True,
 }
 
 # --- Name-style helpers ---

@@ -29,7 +29,10 @@ run () = {
 
   dbg (serialize (Person { name: "Alice", age: 30 }))
 
-  # Unit constructor → {"VariantName": null}
+  # Unit constructor → bare JSON string ("Admin"). Payload-bearing
+  # variants still emit `{"VariantName": payload}` — the per-variant
+  # default matches serde / kotlinx. See EncodeDeriveCustom for the
+  # `as_enum` / `as_tagged` overrides if you want uniform shape.
   dbg (serialize Admin)
 
   # Nested record + ADT — all derived, composes automatically.

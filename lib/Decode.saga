@@ -175,6 +175,7 @@ trait FromJsonArgs a {
 # from a VArray.
 trait FromVariantPayload a {
   fun decode_payload : Options -> Json -> a needs {Fail Error}
+  fun is_unit_payload : a -> Bool
 }
 
 # --- Primitive + container impls (FromJson) ---
@@ -298,10 +299,12 @@ impl FromVariantPayload for U1 needs {Fail Error} {
     VNull -> U1
     other -> fail! (InvalidShape "null" (classify other) [])
   }
+  is_unit_payload _ = True
 }
 
 impl FromVariantPayload for Leaf a where {a: FromJson} needs {Fail Error} {
   decode_payload opts j = Leaf (from_json_with opts j)
+  is_unit_payload _ = False
 }
 
 impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fail Error} {
@@ -314,6 +317,7 @@ impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} nee
     }
     other -> fail! (InvalidShape "Array" (classify other) [])
   }
+  is_unit_payload _ = False
 }
 
 # --- TagFormat-specific decoding helpers ---
@@ -327,10 +331,20 @@ lookup_json k ((k2, v) :: rest) = if k == k2 then Just v else lookup_json k rest
 
 # ExternallyTagged: {"VariantName": payload}. The variant impl finds the
 # key matching its expected name and decodes the value as payload.
+# When `opts.unit_variants_as_strings` is True (the default), a bare
+# JSON string is also accepted as the wire form for unit variants — the
+# string must match the expected variant name, and the payload type
+# must be U1 (otherwise decode_payload of VNull fails naturally).
 fun decode_external : Options -> String -> Json -> a
   needs {Fail Error}
   where {a: FromVariantPayload}
 decode_external opts expected j = case to_value j {
+  VString s ->
+    if opts.unit_variants_as_strings then {
+      if s == expected then decode_payload opts (from_value VNull)
+      else fail! (InvalidShape $"variant '{expected}'" $"variant '{s}'" [])
+    }
+    else fail! (InvalidShape $"Object with variant '{expected}'" "String" [])
   VObject pairs -> case lookup_json expected (List.map value_pair_to_json pairs) {
     Just payload -> decode_payload opts payload
     Nothing -> fail! (InvalidShape $"variant '{expected}'" "absent" [])
@@ -436,6 +450,29 @@ pub fun derive_from_with : Options -> Json -> a
   needs {Fail Error}
   where {a: Generic r, r: FromJson}
 derive_from_with opts j = from (from_json_with opts j)
+
+#@ Decoding strategy: accept a bare JSON string as a variant tag.
+#@ Routes through the externally-tagged path with
+#@ `unit_variants_as_strings: True`, so unit variants decode from
+#@ `"Admin"` cleanly. Payload-bearing variants fail — there's no
+#@ payload data in a bare string to reconstruct from. Mirror of
+#@ `SagaJson.Encode.as_enum`.
+pub fun as_enum_from : Options -> Json -> a
+  needs {Fail Error}
+  where {a: FromJson}
+as_enum_from opts j =
+  from_json_with { opts | unit_variants_as_strings: True } j
+
+#@ Decoding strategy: force the externally-tagged `{"Variant": payload}`
+#@ shape for unit variants too. Mirror of `SagaJson.Encode.as_tagged` —
+#@ drives the decode through `unit_variants_as_strings: False`
+#@ regardless of the caller's Options. Useful for decoding pre-default-
+#@ refinement JSON that always wraps unit variants.
+pub fun as_tagged_from : Options -> Json -> a
+  needs {Fail Error}
+  where {a: FromJson}
+as_tagged_from opts j =
+  from_json_with { opts | unit_variants_as_strings: False } j
 
 #@ Post-process a decoded value with an invariant check. The decoder
 #@ produces a candidate value, then the invariant function may `fail!`

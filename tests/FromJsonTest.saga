@@ -9,8 +9,15 @@ import SagaJson as J (
   default_options,
   CamelCase,
 )
-import SagaJson.Encode as E (ToJson, serialize, serialize_with)
-import SagaJson.Decode as D (FromJson, deserialize, deserialize_with, refine)
+import SagaJson.Encode as E (ToJson, serialize, serialize_with, as_enum, as_tagged)
+import SagaJson.Decode as D (
+  FromJson,
+  deserialize,
+  deserialize_with,
+  refine,
+  as_enum_from,
+  as_tagged_from,
+)
 
 # --- Types under test ---
 #
@@ -146,6 +153,68 @@ tests () = {
 
       test "ADT Shape: multi-arg Rect" (fun () ->
         assert_eq (deserialize (serialize (Rect 3 4)) : Result Shape J.Error) (Ok (Rect 3 4)))
+    })
+
+    describe "unit-variant defaults (bare string)" (fun () -> {
+      test "decodes bare string \"Admin\" as Role" (fun () ->
+        assert_eq (deserialize "\"Admin\"" : Result Role J.Error) (Ok Admin))
+
+      test "decodes bare string \"Viewer\" as Role (rightmost)" (fun () ->
+        assert_eq (deserialize "\"Viewer\"" : Result Role J.Error) (Ok Viewer))
+
+      test "still accepts legacy wrapped form by default" (fun () ->
+        assert_eq
+          (deserialize "{\"Admin\":null}" : Result Role J.Error) (Ok Admin))
+
+      test "rejects bare string under unit_variants_as_strings: False" (fun () -> {
+        let opts = { default_options | unit_variants_as_strings: False }
+        assert_err (deserialize_with opts "\"Admin\"" : Result Role J.Error)
+      })
+
+      test "mixed ADT round-trips Triangle as bare and Circle as wrapped" (fun () -> {
+        assert_eq (serialize Triangle) "\"Triangle\""
+        assert_eq (serialize (Circle 7)) "{\"Circle\":7}"
+        assert_eq (deserialize "\"Triangle\"" : Result Shape J.Error) (Ok Triangle)
+        assert_eq (deserialize "{\"Circle\":7}" : Result Shape J.Error) (Ok (Circle 7))
+      })
+
+      test "round-trip via default opts on Role" (fun () ->
+        assert_eq (deserialize (serialize Admin) : Result Role J.Error) (Ok Admin))
+
+      test "round-trip via default opts on Shape" (fun () ->
+        assert_eq (deserialize (serialize Triangle) : Result Shape J.Error) (Ok Triangle))
+    })
+
+    describe "as_enum / as_tagged strategies" (fun () -> {
+      test "as_enum_from decodes bare string" (fun () -> {
+        let got = J.parse (fun jj -> (as_enum_from default_options jj : Role)) "\"Editor\""
+        assert_eq got (Ok Editor)
+      })
+
+      test "as_enum_from also accepts wrapped form for unit variants" (fun () -> {
+        let got = J.parse (fun jj -> (as_enum_from default_options jj : Role)) "{\"Editor\":null}"
+        assert_eq got (Ok Editor)
+      })
+
+      test "as_enum_from applies rename_all" (fun () -> {
+        let opts = { default_options | rename_all: ScreamingSnakeCase }
+        let got = J.parse (fun jj -> (as_enum_from opts jj : Role)) "\"ADMIN\""
+        assert_eq got (Ok Admin)
+      })
+
+      test "as_tagged round-trip preserves wrapped shape for unit variants" (fun () -> {
+        let enc = E.render (as_tagged default_options Admin)
+        assert_eq enc "{\"Admin\":null}"
+        let got = J.parse (fun jj -> (as_tagged_from default_options jj : Role)) enc
+        assert_eq got (Ok Admin)
+      })
+
+      test "as_enum / as_enum_from round-trip" (fun () -> {
+        let enc = E.render (as_enum default_options Editor)
+        assert_eq enc "\"Editor\""
+        let got = J.parse (fun jj -> (as_enum_from default_options jj : Role)) enc
+        assert_eq got (Ok Editor)
+      })
     })
 
     describe "Options symmetry" (fun () -> {

@@ -11,7 +11,7 @@ import SagaJson as J (
   CamelCase,
   AdjacentlyTagged,
 )
-import SagaJson.Encode as E (ToJson, serialize_with)
+import SagaJson.Encode as E (ToJson, serialize_with, as_enum, as_tagged, render)
 
 record User {
   first_name: String,
@@ -22,6 +22,14 @@ type Status =
   | Active
   | Pending
   | Closed
+  deriving (Debug, ToJson)
+
+# Mixed ADT: unit + payload-bearing variants together. Shows the
+# per-variant default and how the override strategies treat it.
+type Event =
+  | Heartbeat
+  | Login Int
+  | Click Int Int
   deriving (Debug, ToJson)
 
 record Notification {
@@ -59,4 +67,17 @@ run () = {
     message: "hello",
     details: Nothing,
   }))
+
+  # as_enum: drop any payload, emit only the variant tag as a bare
+  # string. Lossy by design — useful for analytics / logging /
+  # foreign-API enum compatibility. Note `Login 42` discards the `42`.
+  dbg (render (as_enum default_options Heartbeat))   # "Heartbeat"
+  dbg (render (as_enum default_options (Login 42)))  # "Login"
+
+  # as_tagged: force the externally-tagged `{"V": payload}` shape
+  # uniformly, including for unit variants. Recovers the legacy
+  # pre-default-refinement shape. Round-trips losslessly via
+  # `as_tagged_from` on the decode side.
+  dbg (render (as_tagged default_options Heartbeat))   # {"Heartbeat":null}
+  dbg (render (as_tagged default_options (Login 42)))  # {"Login":42}
 }

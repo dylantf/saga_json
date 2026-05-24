@@ -695,6 +695,66 @@ Saga gotchas surfaced (worth carrying forward):
 
 ---
 
+## Default refinement (post-Phase 6): unit variants as bare strings
+
+**Status:** Shipped. Not a new phase — a default-shape change inside the
+externally-tagged path, plus two override strategy functions.
+
+Changes:
+
+- `Options` gains `unit_variants_as_strings: Bool` (default True). With
+  the default, unit (U1-payload) variants emit as bare JSON strings
+  (`"Admin"`) instead of the legacy wrapped form (`{"Admin": null}`).
+  Matches serde, kotlinx.serialization, and most other modern JSON
+  libraries. Payload-bearing variants are unaffected (still
+  `{"Circle": 1}`, `{"Rect": [1, 2]}`).
+- `VariantPayload` trait gains `is_unit_payload : a -> Bool` so the
+  `ExternallyTagged` branch of `ToJson for Variant n a` can choose
+  per-variant between bare-string and wrapped output. `FromVariantPayload`
+  gains the symmetric method for parity (the decoder currently uses it
+  only as documentation; bare-string decoding is dispatched in
+  `decode_external` by inspecting the input shape).
+- Decoder accepts BOTH forms regardless of the flag. The flag only
+  gates encode shape; this is intentional — legacy JSON keeps parsing.
+- New public strategy functions:
+  - `Encode.as_enum opts x` — emit any variant as a bare string of its
+    tag name, dropping any payload data. Lossy by design. Useful for
+    analytics / foreign-API enum compatibility.
+  - `Encode.as_tagged opts x` — force the wrapped
+    `{"Variant": payload}` shape on every variant including unit ones.
+    Recovers the legacy shape.
+  - `Decode.as_enum_from opts j` — bare-string variant decode (also
+    accepts the legacy wrapped form for unit variants).
+  - `Decode.as_tagged_from opts j` — force-wrapped variant decode.
+  - All four operate at the Json layer / via the `unit_variants_as_strings`
+    flag — no new trait machinery is required.
+
+Compiler bug surfaced and fixed mid-task:
+
+- Dictionary passing for compound `{Generic a r, Trait r}` constraints
+  in free functions was broken: a helper like
+  `fun via_generic : a -> String where {a: Generic r, r: MyJson}` that
+  called `encode (to x)` panicked at runtime with `bad argument` in
+  the `Std.String` Debug dictionary, even though the directly-derived
+  impl with the structurally identical body worked. Minimal repro in
+  `Repro.saga` (now deleted). Fixed in the compiler same day.
+
+Design notes worth carrying forward:
+
+- The "uniform shape per ADT" alternative (all bare-string when every
+  variant is nullary, all wrapped when any aren't) was considered and
+  rejected. It requires a per-Rep__T bridge for a library-internal
+  trait (`AllUnitVariants` / `IsUnit` — explored, dropped) which the
+  compiler only synthesizes for `deriving`-listed traits. Workaround
+  paths exist (expose the trait pub for user-side deriving, or extend
+  `ToJson` with a probe method that the existing bridge would carry)
+  but per-variant is what serde / kotlinx actually do, so we stayed
+  with the convention.
+
+Test count: 193 (up from 170 baseline), all passing.
+
+---
+
 ## Phase 6 (original spec — preserved for historical context)
 
 **Goal:** Symmetric decode path. Reuse `Options` knobs (the same `rename_all`, `tag_format`, etc. apply in reverse). Add post-process `refine` for decoders to handle invariants the schema can't express. Sum-type decoding is correct because Phase 5's Symbol migration made `Variant n a` discriminable by `n`.

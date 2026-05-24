@@ -308,6 +308,7 @@ Initial fields:
 - `omit_nothing : Bool` — **encode-only**. Drops `Maybe` fields that are `Nothing` instead of emitting `null`. No-op on decode.
 - `tag_format : TagFormat` — External / Adjacent / Internal / Untagged. Symmetric between directions. `InternallyTagged` falls back to `ExternallyTagged` for primitive/array payloads (serde-style restriction).
 - `tag_field : String`, `content_field : String` — for Adjacent
+- `unit_variants_as_strings : Bool` (default True) — in `ExternallyTagged` mode, emit `"Admin"` for unit variants instead of `{"Admin": null}`. Matches serde / kotlinx behavior. The decoder accepts both forms regardless of the flag (legacy compatibility). Set to False to force the wrapped shape on encode. The `as_enum` / `as_tagged` strategy functions are higher-level overrides if you'd rather not pass Options at every call site.
 
 Resist adding `overrides : Map String (a -> Json)` or `field_renames : Map`. Those reinvent attributes as a stringly-typed record with worse type checking. The escape hatch for per-field control is dropping to hand-built `J.object`.
 
@@ -359,8 +360,8 @@ Decisions baked into `deriving (ToJson)` with default Options. These are sticky 
 
 | Decision          | Default                                                 | Notes                                        |
 | ----------------- | ------------------------------------------------------- | -------------------------------------------- |
-| Sum encoding      | Externally tagged: `{"Move": {...}}`                    | Only format that round-trips arbitrary sums  |
-| Unit constructors | `{"Admin": null}`                                       | Could specialize to bare `"Admin"`; pick one |
+| Sum encoding      | Externally tagged: `{"Move": {...}}` for payload variants; per-variant default | Only format that round-trips arbitrary sums  |
+| Unit constructors | Bare string: `"Admin"`                                  | Matches serde / kotlinx default. Toggle via `unit_variants_as_strings: False` for the legacy `{"Admin": null}` shape, or use `as_tagged` / `as_tagged_from` overrides |
 | `Maybe` fields    | Emit `null` for `Nothing`                               | Symmetric with decoding, lossless            |
 | Field naming      | Reflect source symbol (snake_case by Saga convention); apply `rename_all` symmetrically on encode and decode | `rename_all: CamelCase` produces `userId` on encode and expects `userId` on decode |
 | Float formatting  | TBD — needs decision; printf-`%g` is good enough for v1 | Shortest round-trip is a project unto itself |

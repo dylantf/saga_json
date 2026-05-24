@@ -13,9 +13,11 @@ record Person {
   age: Int,
 } deriving (Debug, FromJson)
 
-# ADTs derive the same way. By default, constructors are externally
-# tagged: `{"VariantName": payload}`. For a unit constructor like
-# `Admin`, the payload is `null`.
+# ADTs derive the same way. By default, payload-bearing constructors
+# are externally tagged: `{"VariantName": payload}`. Unit constructors
+# like `Admin` emit (and accept) a bare string: `"Admin"`. The decoder
+# also accepts the legacy wrapped form (`{"Admin": null}`) for
+# backwards compatibility.
 type Role =
   | Admin
   | Editor
@@ -36,10 +38,10 @@ run () = {
   let person_json = """{"name":"Alice","age":30}"""
   dbg (deserialize person_json : Result Person J.Error)
 
-  let role_json = """{"Admin":null}"""
+  let role_json = "\"Admin\""
   dbg (deserialize role_json : Result Role J.Error)
 
   let account_json =
-    """{"person":{"name":"Alice","age":30},"role":{"Editor":null}}"""
+    """{"person":{"name":"Alice","age":30},"role":"Editor"}"""
   dbg (deserialize account_json : Result Account J.Error)
 }
