@@ -1,0 +1,139 @@
+module DecodeTest
+
+import Std.Fail (Fail)
+import Std.Test (Testing, Test, describe, test, assert_eq, assert_ok, assert_err)
+import SagaJson as J
+import SagaJson.Decode as D
+import SagaJson.Encode as E
+
+fun decode : (J.Json -> a needs {Fail J.Error}) -> J.Json -> Result a J.Error
+decode dec j = J.run dec j
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "Decode" (fun () -> {
+    describe "primitive decoders — happy path" (fun () -> {
+      test "string" (fun () ->
+        assert_eq (decode D.string (E.string "hi")) (Ok "hi"))
+      test "int" (fun () ->
+        assert_eq (decode D.int (E.int 42)) (Ok 42))
+      test "float from float" (fun () ->
+        assert_eq (decode D.float (E.float 1.5)) (Ok 1.5))
+      test "float from int (coerced)" (fun () ->
+        assert_eq (decode D.float (E.int 3)) (Ok 3.0))
+      test "bool true" (fun () ->
+        assert_eq (decode D.bool (E.bool True)) (Ok True))
+      test "bool false" (fun () ->
+        assert_eq (decode D.bool (E.bool False)) (Ok False))
+    })
+
+    describe "primitive decoders — shape errors" (fun () -> {
+      test "string on int" (fun () ->
+        assert_eq
+          (decode D.string (E.int 1))
+          (Err (J.InvalidShape "String" "Int" [])))
+      test "int on string" (fun () ->
+        assert_eq
+          (decode D.int (E.string "x"))
+          (Err (J.InvalidShape "Int" "String" [])))
+      test "int on float (not coerced)" (fun () ->
+        assert_eq
+          (decode D.int (E.float 1.5))
+          (Err (J.InvalidShape "Int" "Float" [])))
+      test "bool on null" (fun () ->
+        assert_eq
+          (decode D.bool E.null)
+          (Err (J.InvalidShape "Bool" "null" [])))
+      test "float on string" (fun () ->
+        assert_eq
+          (decode D.float (E.string "1.5"))
+          (Err (J.InvalidShape "Float" "String" [])))
+    })
+
+    describe "field" (fun () -> {
+      test "present field navigates" (fun () -> {
+        let j = E.object [("name", E.string "Alice")]
+        assert_eq (decode (fun o -> D.string (D.field "name" o)) j) (Ok "Alice")
+      })
+      test "missing field fails" (fun () -> {
+        let j = E.object [("name", E.string "Alice")]
+        assert_err (decode (D.field "age") j)
+      })
+      test "field on non-object fails" (fun () ->
+        assert_err (decode (D.field "x") (E.int 1)))
+    })
+
+    describe "at" (fun () -> {
+      test "happy" (fun () -> {
+        let j = E.object [("name", E.string "Alice")]
+        assert_eq (decode (D.at "name" D.string) j) (Ok "Alice")
+      })
+      test "wrong-typed leaf prefixes path with field name" (fun () ->
+        assert_eq
+          (decode (D.at "age" D.int) (E.object [("age", E.string "old")]))
+          (Err (J.InvalidShape "Int" "String" ["age"])))
+      test "nested path is built outside-in" (fun () ->
+        assert_eq
+          (decode
+            (D.at "address" (D.at "coords" (D.at "lat" D.float)))
+            (E.object [
+              ("address", E.object [
+                ("coords", E.object [("lat", E.string "not a float")])
+              ])
+            ]))
+          (Err (J.InvalidShape "Float" "String" ["address", "coords", "lat"])))
+      test "missing intermediate field" (fun () ->
+        assert_err
+          (decode
+            (D.at "address" (D.at "coords" D.float))
+            (E.object [("address", E.object [])])))
+    })
+
+    describe "parse — string entry point" (fun () -> {
+      test "happy path" (fun () ->
+        assert_eq (J.parse (D.at "x" D.int) "{\"x\":1}") (Ok 1))
+      test "shape error path is preserved through parse" (fun () ->
+        assert_eq
+          (J.parse (D.at "x" D.int) "{\"x\":\"nope\"}")
+          (Err (J.InvalidShape "Int" "String" ["x"])))
+      test "invalid JSON surfaces InvalidJson" (fun () -> {
+        case J.parse (D.at "x" D.int) "{not json}" {
+          Err (J.InvalidJson _) -> assert! True ""
+          other -> assert! False ($"expected InvalidJson, got {debug other}")
+        }
+      })
+    })
+
+    describe "list_of" (fun () -> {
+      test "empty array" (fun () ->
+        assert_eq (decode (D.list_of D.int) (E.array [])) (Ok []))
+      test "homogeneous ints" (fun () ->
+        assert_eq
+          (decode (D.list_of D.int) (E.array [E.int 1, E.int 2, E.int 3]))
+          (Ok [1, 2, 3]))
+      test "strings" (fun () ->
+        assert_eq
+          (decode (D.list_of D.string) (E.array [E.string "a", E.string "b"]))
+          (Ok ["a", "b"]))
+      test "non-array fails" (fun () ->
+        assert_eq
+          (decode (D.list_of D.int) (E.int 1))
+          (Err (J.InvalidShape "Array" "Int" [])))
+      test "element shape mismatch propagates" (fun () ->
+        assert_err
+          (decode (D.list_of D.int) (E.array [E.int 1, E.string "two"])))
+    })
+
+    describe "nullable" (fun () -> {
+      test "null -> Nothing" (fun () ->
+        assert_eq (decode (D.nullable D.string) E.null) (Ok Nothing))
+      test "value -> Just" (fun () ->
+        assert_eq
+          (decode (D.nullable D.string) (E.string "hi"))
+          (Ok (Just "hi")))
+      test "wrong-shaped value still fails" (fun () ->
+        assert_err (decode (D.nullable D.string) (E.int 1)))
+    })
+
+  })
+}

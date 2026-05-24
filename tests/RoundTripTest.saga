@@ -1,0 +1,97 @@
+module RoundTripTest
+
+import Std.Test (Testing, Test, describe, test, assert_eq, assert_ok)
+import SagaJson as J
+import SagaJson.Encode as E
+import SagaJson.Parser (Value)
+
+# Compare two Json values structurally by unwrapping to Value (which derives
+# Eq). Json itself is opaque and intentionally doesn't expose Eq.
+fun same_json : J.Json -> J.Json -> Bool
+same_json a b = J.to_value a == J.to_value b
+
+# parse_string → render → parse_string and assert the resulting Json matches.
+fun assert_round_trip : String -> Unit needs {Test}
+assert_round_trip src = case J.parse_string src {
+  Err _ -> assert! False $"input did not parse: {src}"
+  Ok original -> {
+    let rendered = E.render original
+    case J.parse_string rendered {
+      Err _ -> assert! False $"render produced unparseable output: {rendered}"
+      Ok reparsed ->
+        assert! (same_json original reparsed) $"round-trip mismatch: {src} -> {rendered}"
+    }
+  }
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "RoundTrip" (fun () -> {
+    describe "primitives" (fun () -> {
+      test "null" (fun () -> assert_round_trip "null")
+      test "true" (fun () -> assert_round_trip "true")
+      test "false" (fun () -> assert_round_trip "false")
+      test "int" (fun () -> assert_round_trip "42")
+      test "negative int" (fun () -> assert_round_trip "-7")
+      test "zero" (fun () -> assert_round_trip "0")
+      test "float" (fun () -> assert_round_trip "1.5")
+      test "negative float" (fun () -> assert_round_trip "-3.14")
+      test "string" (fun () -> assert_round_trip "\"hello\"")
+      test "empty string" (fun () -> assert_round_trip "\"\"")
+    })
+
+    describe "strings preserve content" (fun () -> {
+      test "embedded quotes" (fun () -> assert_round_trip "\"a\\\"b\"")
+      test "embedded backslash" (fun () -> assert_round_trip "\"a\\\\b\"")
+      test "embedded newline" (fun () -> assert_round_trip "\"a\\nb\"")
+      test "embedded tab" (fun () -> assert_round_trip "\"a\\tb\"")
+      test "UTF-8 multibyte" (fun () -> assert_round_trip "\"café\"")
+    })
+
+    describe "containers" (fun () -> {
+      test "empty array" (fun () -> assert_round_trip "[]")
+      test "empty object" (fun () -> assert_round_trip "{}")
+      test "homogeneous array" (fun () -> assert_round_trip "[1,2,3]")
+      test "mixed array" (fun () -> assert_round_trip "[1,\"two\",true,null]")
+      test "single-field object" (fun () -> assert_round_trip "{\"x\":1}")
+      test "multi-field object" (fun () ->
+        assert_round_trip "{\"a\":1,\"b\":2}")
+      test "nested object" (fun () -> assert_round_trip "{\"o\":{\"i\":1}}")
+      test "deeply nested" (fun () ->
+        assert_round_trip "{\"a\":{\"b\":{\"c\":[1,2,{\"d\":true}]}}}")
+    })
+
+    describe "float round-trips preserve Float type (not Int)" (fun () -> {
+      # The renderer uses `show Float`. If it produced "1" instead of "1.0",
+      # the parser would re-tag it as VInt, breaking these tests.
+      test "1.0 stays VFloat" (fun () -> {
+        let v = E.float 1.0
+        case J.parse_string (E.render v) {
+          Err _ -> assert! False "did not re-parse"
+          Ok reparsed -> case J.to_value reparsed {
+            VFloat _ -> assert! True ""
+            _ ->
+              assert! False $"expected VFloat, got {debug (J.to_value reparsed)}"
+          }
+        }
+      })
+      test "0.0 stays VFloat" (fun () -> {
+        let v = E.float 0.0
+        case J.parse_string (E.render v) {
+          Err _ -> assert! False "did not re-parse"
+          Ok reparsed -> case J.to_value reparsed {
+            VFloat _ -> assert! True ""
+            _ ->
+              assert! False $"expected VFloat, got {debug (J.to_value reparsed)}"
+          }
+        }
+      })
+    })
+
+    describe "realistic document" (fun () -> {
+      let sample =
+        "{\"id\":42,\"name\":\"Alice\",\"active\":true,\"manager\":null,\"balance\":1234.56,\"roles\":[\"admin\",\"editor\"],\"address\":{\"street\":\"123 Main St\",\"city\":\"Springfield\",\"zip\":\"12345\",\"coords\":{\"lat\":40.7128,\"lng\":-74.006}},\"tags\":[]}"
+      test "user record" (fun () -> assert_round_trip sample)
+    })
+  })
+}

@@ -1,0 +1,579 @@
+#@ JSON encoders and rendering.
+#@
+#@ Construct `Json` values with the primitive functions (`string`, `int`,
+#@ `array`, `object`, ...). Use `render` to serialize a `Json` value to
+#@ a compact JSON string.
+module SagaJson.Encode
+
+import Std.Base (Show, Debug)
+import Std.BitString as BS
+import Std.Fail (Fail)
+import Std.Int
+import Std.List
+import Std.String
+import SagaJson (
+  Json,
+  Error,
+  from_value,
+  to_value,
+  NameStyle,
+  TagFormat,
+  Options,
+  apply_name_style
+)
+import SagaJson as J
+import SagaJson.Parser (Value)
+
+# --- Primitive constructors ---
+
+#@ Encode a Saga `String` as a JSON string value.
+pub fun string : String -> Json
+string s = from_value (VString s)
+
+#@ Encode an `Int` as a JSON number.
+pub fun int : Int -> Json
+int n = from_value (VInt n)
+
+#@ Encode a `Float` as a JSON number.
+pub fun float : Float -> Json
+float f = from_value (VFloat f)
+
+#@ Encode a `Bool` as JSON `true` / `false`.
+pub fun bool : Bool -> Json
+bool b = from_value (VBool b)
+
+#@ The JSON `null` value.
+pub val null = from_value VNull
+
+#@ Encode a list of `Json` values as a JSON array.
+pub fun array : List Json -> Json
+array items = from_value (VArray (List.map to_value items))
+
+#@ Encode a list of (key, value) pairs as a JSON object. Key order is
+#@ preserved.
+pub fun object : List (String, Json) -> Json
+object pairs = from_value (VObject (List.map pair_to_value pairs))
+
+fun pair_to_value : (String, Json) -> (String, Value)
+pair_to_value (k, v) = (k, to_value v)
+
+# --- Rendering ---
+
+#@ Render a `Json` value as a compact JSON string (no whitespace).
+#@ Output round-trips through `SagaJson.parse_string`.
+pub fun render : Json -> String
+render j = render_value (to_value j)
+
+fun render_value : Value -> String
+render_value v = case v {
+  VNull -> "null"
+  VBool True -> "true"
+  VBool False -> "false"
+  VInt n -> show n
+  VFloat f -> show f
+  VString s -> render_string s
+  VArray items -> "[" <> String.join "," (List.map render_value items) <> "]"
+  VObject pairs -> "{" <> String.join "," (List.map render_pair pairs) <> "}"
+}
+
+fun render_pair : (String, Value) -> String
+render_pair (k, v) = render_string k <> ":" <> render_value v
+
+fun render_string : String -> String
+render_string s = {
+  let escaped = escape_loop (BS.from_string s) <<>>
+  case BS.to_string escaped {
+    Ok r -> $"\"{r}\""
+    Err _ -> $"\"{s}\""
+  }
+}
+
+# Inverse of Parser.escape_byte. Walks input bytes; backslash-escapes the
+# six JSON specials (`"`, `\`, `\b`, `\f`, `\n`, `\r`, `\t`), `\u00XX`-escapes
+# remaining sub-0x20 bytes, and passes all other bytes through (including
+# high-bit UTF-8 continuations).
+fun escape_loop : BitString -> BitString -> BitString
+escape_loop bs acc = case bs {
+  <<>> -> acc
+  <<34, rest/binary>> -> escape_loop rest (acc <> <<92, 34>>)
+  <<92, rest/binary>> -> escape_loop rest (acc <> <<92, 92>>)
+  <<8, rest/binary>> -> escape_loop rest (acc <> <<92, 98>>)
+  <<9, rest/binary>> -> escape_loop rest (acc <> <<92, 116>>)
+  <<10, rest/binary>> -> escape_loop rest (acc <> <<92, 110>>)
+  <<12, rest/binary>> -> escape_loop rest (acc <> <<92, 102>>)
+  <<13, rest/binary>> -> escape_loop rest (acc <> <<92, 114>>)
+  <<c:8, rest/binary>> when c < 32 -> escape_loop rest (acc <> unicode_escape c)
+  <<c:8, rest/binary>> -> escape_loop rest (acc <> <<c>>)
+}
+
+fun unicode_escape : Int -> BitString
+unicode_escape c = {
+  let padded = String.pad_left 2 "0" (Int.to_hex c)
+  BS.from_string $"\\u00{padded}"
+}
+
+# --- ToJson trait + helpers ---
+#
+# The public `ToJson` trait has the two-method shape from
+# `saga/examples/99k`. Library code provides building-block impls for
+# `to_json_with`; the default body for `to_json` forwards through
+# `default_options`. Hand-written user impls only need `to_json_with`.
+#
+# Three additional traits (`ToJsonFields`, `ToJsonArgs`, `VariantPayload`)
+# are library-internal and handle the three syntactic positions a Rep can
+# occupy: record interior, variant arg list, variant payload. Splitting
+# them gives compile-time non-overlap. See the "Why four traits" section
+# in `docs/planning/serialization.md`.
+
+#@ Types that can be encoded as JSON. Hand-write `to_json_with` for your
+#@ own records and ADTs (the `to_json` convenience is inherited from the
+#@ trait default), or write `deriving (ToJson)`.
+pub trait ToJson a {
+  fun to_json_with : Options -> a -> Json
+  fun to_json : a -> Json
+  to_json x = to_json_with SagaJson.default_options x
+}
+
+# Library-internal: produces a list of (field-name, value) pairs. Used by
+# `Record` to assemble its inner object.
+trait ToJsonFields a {
+  fun to_fields : Options -> a -> List (String, Json)
+}
+
+# Library-internal: produces a list of positional JSON args. Used by a
+# multi-arg `VariantPayload`.
+trait ToJsonArgs a {
+  fun to_args : Options -> a -> List Json
+}
+
+# Library-internal: produces the payload Json that follows the variant
+# name in `{name: payload}` (or whatever the active TagFormat dictates).
+# `is_unit_payload` is used by `Variant`'s ExternallyTagged branch to
+# decide whether to emit the variant as a bare string (`"Admin"`) or
+# the wrapped form (`{"Admin": null}`).
+trait VariantPayload a {
+  fun payload_json : Options -> a -> Json
+  fun is_unit_payload : a -> Bool
+}
+
+# --- Primitive + container impls (ToJson) ---
+
+impl ToJson for String {
+  to_json_with _ s = string s
+}
+
+impl ToJson for Int {
+  to_json_with _ n = int n
+}
+
+impl ToJson for Float {
+  to_json_with _ f = float f
+}
+
+impl ToJson for Bool {
+  to_json_with _ b = bool b
+}
+
+impl ToJson for List a where {a: ToJson} {
+  to_json_with opts xs = array (List.map (fun x -> to_json_with opts x) xs)
+}
+
+impl ToJson for Maybe a where {a: ToJson} {
+  to_json_with opts m = case m {
+    Nothing -> null
+    Just x -> to_json_with opts x
+  }
+}
+
+# Tuple impls (arity 2..10). Encoded as positional JSON arrays.
+impl ToJson for (a, b) where {a: ToJson, b: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2) = t
+    array [to_json_with opts x1, to_json_with opts x2]
+  }
+}
+
+impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3) = t
+    array [to_json_with opts x1, to_json_with opts x2, to_json_with opts x3]
+  }
+}
+
+impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2,
+      to_json_with opts x3, to_json_with opts x4,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson} {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson,
+    e: ToJson, f: ToJson, g: ToJson, h: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
+    f: ToJson, g: ToJson, h: ToJson, i: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
+    ]
+  }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i, j)
+  where {
+    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
+    f: ToJson, g: ToJson, h: ToJson, i: ToJson, j: ToJson,
+  } {
+  to_json_with opts t = {
+    let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
+    array [
+      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
+      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
+      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
+      to_json_with opts x10,
+    ]
+  }
+}
+
+# --- Building-block impls for the Generic Rep ---
+#
+# Twelve impls across four traits. Some Rep types appear in multiple
+# syntactic positions and so implement multiple helper traits (`Leaf a`
+# participates in three). The traits are disjoint so there's no overlap.
+
+# ToJson assembles complete Json values. The Leaf-as-ToJson impl is the
+# passthrough used when a leaf sits inside a Labeled in a record field.
+impl ToJson for Leaf a where {a: ToJson} {
+  to_json_with opts (Leaf x) = to_json_with opts x
+}
+
+impl ToJson for Or l r where {l: ToJson, r: ToJson} {
+  to_json_with opts v = case v {
+    Or_Left x -> to_json_with opts x
+    Or_Right x -> to_json_with opts x
+  }
+}
+
+impl ToJson for Record a where {a: ToJsonFields} {
+  to_json_with opts (Record _ inner) = {
+    let fields = to_fields opts inner
+    let kept = if opts.omit_nothing then drop_null_fields fields else fields
+    object kept
+  }
+}
+
+impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload} {
+  to_json_with opts (Variant payload) = {
+    let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    let p = payload_json opts payload
+    case opts.tag_format {
+      ExternallyTagged ->
+        if opts.unit_variants_as_strings && is_unit_payload payload
+        then string name
+        else object [(name, p)]
+      AdjacentlyTagged ->
+        object [(opts.tag_field, string name), (opts.content_field, p)]
+      Untagged -> p
+      InternallyTagged -> tag_internally opts.tag_field name p
+    }
+  }
+}
+
+# Merge the tag field into a payload's object body. `null` payloads emit
+# just the tag. Primitive and array payloads can't carry an extra key, so
+# they fall back to the externally-tagged form.
+fun tag_internally : String -> String -> Json -> Json
+tag_internally tag_field name payload = case to_value payload {
+  VNull -> object [(tag_field, string name)]
+  VObject pairs -> from_value (VObject ((tag_field, VString name) :: pairs))
+  _ -> object [(name, payload)]
+}
+
+impl ToJson for Adt a where {a: ToJson} {
+  to_json_with opts (Adt _ inner) = to_json_with opts inner
+}
+
+# ToJsonFields: record-interior dispatch.
+impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
+  to_fields opts (Labeled x) = {
+    let name = symbol_name (Proxy : Proxy n)
+    [(apply_name_style opts.rename_all name, to_json_with opts x)]
+  }
+}
+
+impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {
+  to_fields opts (And l r) = List.append (to_fields opts l) (to_fields opts r)
+}
+
+# ToJsonArgs: variant-arg-list dispatch.
+impl ToJsonArgs for Leaf a where {a: ToJson} {
+  to_args opts (Leaf x) = [to_json_with opts x]
+}
+
+impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  to_args opts (And l r) = List.append (to_args opts l) (to_args opts r)
+}
+
+# VariantPayload: dispatch by arity. U1 emits null, Leaf emits the
+# unwrapped value, And-of-args emits a JSON array.
+impl VariantPayload for U1 {
+  payload_json _ _ = null
+  is_unit_payload _ = True
+}
+
+impl VariantPayload for Leaf a where {a: ToJson} {
+  payload_json opts (Leaf x) = to_json_with opts x
+  is_unit_payload _ = False
+}
+
+impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  payload_json opts v = case v {
+    And l r -> array (List.append (to_args opts l) (to_args opts r))
+  }
+  is_unit_payload _ = False
+}
+
+# `omit_nothing` is applied after the fact, on the produced fields. The
+# building-block impls don't know a field's source type, only its rendered
+# Json: a `Maybe Nothing` has already become `null` by the time `Record`
+# assembles its fields, so we just filter null values out. A user impl
+# that deliberately emits `null` for a non-Maybe field will also be
+# dropped under `omit_nothing: True`. This is a documented limitation.
+fun drop_null_fields : List (String, Json) -> List (String, Json)
+drop_null_fields pairs = List.filter not_null_pair pairs
+
+fun not_null_pair : (String, Json) -> Bool
+not_null_pair (_, j) = case to_value j {
+  VNull -> False
+  _ -> True
+}
+
+# --- Layer-3 helpers ---
+
+#@ Encode a value to a compact JSON string using default options.
+#@ Equivalent to `render (to_json x)`.
+pub fun serialize : a -> String where {a: ToJson}
+serialize x = render (to_json x)
+
+#@ Encode a value to a compact JSON string using the given options.
+#@ Equivalent to `render (to_json_with opts x)`.
+pub fun serialize_with : Options -> a -> String where {a: ToJson}
+serialize_with opts x = render (to_json_with opts x)
+
+#@ Derive-then-tweak escape hatch. Calls the Generic-derived encoding
+#@ explicitly, so a hand-written `impl ToJson` can start from the derived
+#@ shape and post-process. Without this, the trait dispatch can't reach
+#@ the derived impl, since the hand-written impl shadows it.
+pub fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
+derive_with opts x = to_json_with opts (to x)
+
+#@ Encoding strategy: emit every variant as a bare JSON string of its
+#@ tag name (e.g. `"Admin"`), dropping any payload data. Lossy by
+#@ design — `Elevated 123` encodes to `"Elevated"`, discarding `123`.
+#@ Useful when a downstream system only cares about the tag (logging,
+#@ analytics, JSON shape compatibility with a foreign enum).
+#@
+#@ The symmetric decoder `SagaJson.Decode.as_enum_from` round-trips
+#@ unit variants but fails on payload-bearing ones — there's no payload
+#@ data in `"Elevated"` to reconstruct from.
+pub fun as_enum : Options -> a -> Json where {a: ToJson}
+as_enum opts x = case to_value (to_json_with opts x) {
+  VString _ -> to_json_with opts x
+  VObject pairs -> case pairs {
+    (name, _) :: _ -> string name
+    [] -> to_json_with opts x
+  }
+  _ -> to_json_with opts x
+}
+
+#@ Encoding strategy: force the externally-tagged `{"Variant": payload}`
+#@ shape for unit variants too. Recovers the pre-default-refinement
+#@ behavior of `{"Admin": null}`. Drives the encode through
+#@ `unit_variants_as_strings: False` regardless of the caller's Options.
+pub fun as_tagged : Options -> a -> Json where {a: ToJson}
+as_tagged opts x =
+  to_json_with { opts | unit_variants_as_strings: False } x
+
+# --- Post-process combinators ---
+#
+# Single-level transformations on a Json object. Compose with `|>` and
+# nest by passing a lambda that operates on the inner Json. All five
+# operate on VObject only; non-object input fails with InvalidShape.
+#
+# update_field / rename_field / remove_field fail loudly if the key is
+# missing. insert_field fails if the key already exists (use update_field
+# to overwrite). Missing-key failure catches the common bug where a
+# post-process refers to a renamed field; silent no-op would hide it.
+
+fun classify : Value -> String
+classify v = case v {
+  VNull -> "null"
+  VBool _ -> "Bool"
+  VInt _ -> "Int"
+  VFloat _ -> "Float"
+  VString _ -> "String"
+  VArray _ -> "Array"
+  VObject _ -> "Object"
+}
+
+fun expect_object : Json -> List (String, Value) needs {Fail Error}
+expect_object j = case to_value j {
+  VObject pairs -> pairs
+  v -> fail! (InvalidShape "Object" (classify v) [])
+}
+
+fun has_key : String -> List (String, Value) -> Bool
+has_key _ [] = False
+has_key k ((k2, _) :: rest) = if k == k2 then True else has_key k rest
+
+fun do_update : String -> (Json -> Json needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+  needs {Fail Error, ..e}
+do_update key f pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == key then (k, to_value (f (from_value v))) :: do_update key f rest
+    else (k, v) :: do_update key f rest
+}
+
+fun do_rename : String -> String -> List (String, Value) -> List (String, Value)
+do_rename old new pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == old then (new, v) :: do_rename old new rest
+    else (k, v) :: do_rename old new rest
+}
+
+fun do_remove : String -> List (String, Value) -> List (String, Value)
+do_remove key pairs = case pairs {
+  [] -> []
+  (k, v) :: rest ->
+    if k == key then do_remove key rest
+    else (k, v) :: do_remove key rest
+}
+
+fun do_map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+  needs {Fail Error, ..e}
+do_map_object f pairs = case pairs {
+  [] -> []
+  (k, v) :: rest -> {
+    let (new_k, new_j) = f (k, from_value v)
+    (new_k, to_value new_j) :: do_map_object f rest
+  }
+}
+
+#@ Apply `f` to the value at `key`. Preserves key order. Fails with
+#@ InvalidShape if the key is missing or the input is not an object.
+#@ The callback may itself raise effects (typically used to nest other
+#@ post-process combinators on the inner Json).
+pub fun update_field : String -> (Json -> Json needs {Fail Error, ..e}) -> Json -> Json
+  needs {Fail Error, ..e}
+update_field key f j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_update key f pairs))
+  else fail! (InvalidShape $"field '{key}'" "missing" [key])
+}
+
+#@ Rename `old` to `new`. Preserves position and value. Fails if `old` is
+#@ missing or the input is not an object.
+pub fun rename_field : String -> String -> Json -> Json needs {Fail Error}
+rename_field old new j = {
+  let pairs = expect_object j
+  if has_key old pairs then from_value (VObject (do_rename old new pairs))
+  else fail! (InvalidShape $"field '{old}'" "missing" [old])
+}
+
+#@ Remove `key`. Fails if `key` is missing or the input is not an object.
+pub fun remove_field : String -> Json -> Json needs {Fail Error}
+remove_field key j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_remove key pairs))
+  else fail! (InvalidShape $"field '{key}'" "missing" [key])
+}
+
+#@ Upsert: replace the value at `key` if it exists (preserving position),
+#@ otherwise append `(key, value)`. The unconditional-write variant; use
+#@ `update_field` or `insert_field` if you want missing/existing to fail.
+pub fun set_field : String -> Json -> Json -> Json needs {Fail Error}
+set_field key value j = {
+  let pairs = expect_object j
+  if has_key key pairs then from_value (VObject (do_update key (fun _ ->
+    value) pairs))
+  else from_value (VObject (List.append pairs [(key, to_value value)]))
+}
+
+#@ Append `(key, value)`. Fails if `key` already exists (use `update_field`
+#@ to overwrite, or `set_field` to upsert) or the input is not an object.
+pub fun insert_field : String -> Json -> Json -> Json needs {Fail Error}
+insert_field key value j = {
+  let pairs = expect_object j
+  if has_key key pairs then fail! (InvalidShape $"absent field '{key}'" "present" [
+    key,
+  ])
+  else from_value (VObject (List.append pairs [(key, to_value value)]))
+}
+
+#@ Apply `f` to every `(key, value)` pair, replacing both. Useful for
+#@ uniform key transformations (e.g. camelCasing every key of a
+#@ dynamic-keyed `Map String _`). Preserves order. The callback may
+#@ itself raise effects.
+pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> Json -> Json
+  needs {Fail Error, ..e}
+map_object f j = {
+  let pairs = expect_object j
+  from_value (VObject (do_map_object f pairs))
+}

@@ -1,110 +1,27 @@
+#@ Demos for saga_json
+#@
+#@ DecodeHand: write a parser function by hand
+#@ DecodeDerive: `deriving (FromJson)` + `deserialize`
+#@ DecodeDeriveCustom: same, but with Options for renaming/tag format
+#@
+#@ EncodeHand: write an `impl ToJson` by hand
+#@ EncodeDerive: `deriving (ToJson)` + `serialize`
+#@ EncodeDeriveCustom: same, but with Options for renaming/tag format
 module Main
 
-import Std.Fail (Fail)
-import Std.IO (console)
-import SagaJson as J (Json)
+import DecodeDerive
+import DecodeDeriveCustom
 
-val user_json = """
-  {
-    "id": 42,
-    "name": "Alice",
-    "active": true,
-    "manager": null,
-    "balance": 1234.56,
-    "roles": ["admin", "editor"],
-    "address": {
-      "street": "123 Main St",
-      "city": "Springfield",
-      "zip": "12345",
-      "coords": { "lat": 40.7128, "lng": -74.006 }
-    },
-    "tags": []
-  }
-  """
-
-val bad_shape = """
-  {"id": "wrong", "name": "Alice"}
-  """
-val bad_syntax = """
-  {"id": 1, "name":}
-  """
-# Deeply nested failure to exercise path prefixing.
-
-
-val nested_bad = """
-  {
-    "id": 1, "name": "x", "active": true, "manager": null,
-    "balance": 0.0, "roles": [], "tags": [],
-    "address": {
-      "street": "a", "city": "b", "zip": "c",
-      "coords": { "lat": "not a float", "lng": 0.0 }
-    }
-  }
-  """
-
-record Coords {
-  lat: Float,
-  lng: Float,
-} deriving (Debug)
-
-record Address {
-  street: String,
-  city: String,
-  zip: String,
-  coords: Coords,
-} deriving (Debug)
-
-record User {
-  id: Int,
-  name: String,
-  active: Bool,
-  manager: Maybe String,
-  balance: Float,
-  roles: List String,
-  address: Address,
-  tags: List String,
-} deriving (Debug)
-
-fun parse_coords : Json -> Coords needs {Fail J.Error}
-parse_coords json = Coords {
-  lat: J.at "lat" J.float json,
-  lng: J.at "lng" J.float json,
-}
-
-fun parse_address : Json -> Address needs {Fail J.Error}
-parse_address json = Address {
-  street: J.at "street" J.string json,
-  city: J.at "city" J.string json,
-  zip: J.at "zip" J.string json,
-  coords: J.at "coords" parse_coords json,
-}
-
-fun parse_user : Json -> User needs {Fail J.Error}
-parse_user json = User {
-  id: J.at "id" J.int json,
-  name: J.at "name" J.string json,
-  active: J.at "active" J.bool json,
-  manager: J.at "manager" (J.nullable J.string) json,
-  balance: J.at "balance" J.float json,
-  roles: J.at "roles" (J.list_of J.string) json,
-  address: J.at "address" parse_address json,
-  tags: J.at "tags" (J.list_of J.string) json,
-}
+import DecodeHand
+import EncodeDerive
+import EncodeDeriveCustom
+import EncodeHand
 
 main () = {
-  dbg "--- happy path ---"
-  J.parse parse_user user_json
-  |> dbg
-
-  dbg "--- bad shape ---"
-  J.parse parse_user bad_shape
-  |> dbg
-
-  dbg "--- bad syntax ---"
-  J.parse parse_user bad_syntax
-  |> dbg
-
-  dbg "--- nested bad shape ---"
-  J.parse parse_user nested_bad
-  |> dbg
+  DecodeHand.run ()
+  DecodeDerive.run ()
+  DecodeDeriveCustom.run ()
+  EncodeHand.run ()
+  EncodeDerive.run ()
+  EncodeDeriveCustom.run ()
 }

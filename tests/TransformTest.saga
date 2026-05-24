@@ -1,0 +1,148 @@
+module TransformTest
+
+import Std.Fail (Fail)
+import Std.String
+import Std.Test (Testing, Test, describe, test, assert_eq, assert_err)
+import SagaJson as J
+import SagaJson.Encode as E
+
+# Run an effectful transformer to a Result so it can be asserted on.
+fun run_t : (J.Json -> J.Json needs {Fail J.Error}) -> J.Json -> Result J.Json J.Error
+run_t f j = J.run f j
+
+# Apply a transformer and assert that the rendered output matches `expected`.
+# Used by every test in this file to keep argument layout single-line-y, since
+# the parser treats multi-line continuations at the same indentation as new
+# statements inside `{...}` test bodies.
+fun assert_renders : J.Json -> (J.Json -> J.Json needs {Fail J.Error}) -> String -> Unit
+  needs {Test}
+assert_renders input edit expected = case run_t edit input {
+  Ok j -> assert_eq (E.render j) expected
+  Err e -> assert! False $"expected Ok, got Err {debug e}"
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "Transform" (fun () -> {
+    describe "update_field" (fun () -> {
+      test "transforms value; preserves order" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2), ("c", E.int 3)]
+        assert_renders j (E.update_field "b" (fun _ ->
+          E.int 99)) "{\"a\":1,\"b\":99,\"c\":3}"
+      })
+      test "missing key fails loudly" (fun () -> {
+        let j = E.object [("a", E.int 1)]
+        assert_err (run_t (E.update_field "nope" (fun x -> x)) j)
+      })
+      test "non-object input fails with InvalidShape" (fun () -> {
+        case run_t (E.update_field "a" (fun x -> x)) (E.int 1) {
+          Err (J.InvalidShape "Object" "Int" []) -> assert! True ""
+          other ->
+            assert! False $"expected InvalidShape Object Int, got {debug other}"
+        }
+      })
+      test "lambda receives inner Json; enables nested edits" (fun () -> {
+        let j =
+          E.object [("outer", E.object [("inner", E.int 1), ("keep", E.int 2)])]
+        let edit = E.update_field "outer" (E.remove_field "inner")
+        assert_renders j edit "{\"outer\":{\"keep\":2}}"
+      })
+    })
+
+    describe "rename_field" (fun () -> {
+      test "renames in place; preserves order and value" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2), ("c", E.int 3)]
+        assert_renders j (E.rename_field "b" "BEE") "{\"a\":1,\"BEE\":2,\"c\":3}"
+      })
+      test "missing key fails loudly" (fun () -> {
+        let j = E.object [("a", E.int 1)]
+        assert_err (run_t (E.rename_field "nope" "new") j)
+      })
+      test "non-object input fails" (fun () ->
+        assert_err (run_t (E.rename_field "a" "b") (E.array [])))
+    })
+
+    describe "remove_field" (fun () -> {
+      test "removes the field" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2), ("c", E.int 3)]
+        assert_renders j (E.remove_field "b") "{\"a\":1,\"c\":3}"
+      })
+      test "missing key fails loudly" (fun () -> {
+        let j = E.object [("a", E.int 1)]
+        assert_err (run_t (E.remove_field "nope") j)
+      })
+      test "non-object input fails" (fun () ->
+        assert_err (run_t (E.remove_field "a") E.null))
+    })
+
+    describe "insert_field (strict)" (fun () -> {
+      test "appends to end" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2)]
+        assert_renders j (E.insert_field "c" (E.int 3)) "{\"a\":1,\"b\":2,\"c\":3}"
+      })
+      test "duplicate key fails loudly" (fun () -> {
+        let j = E.object [("a", E.int 1)]
+        assert_err (run_t (E.insert_field "a" (E.int 99)) j)
+      })
+      test "into empty object" (fun () -> {
+        let j = E.object []
+        assert_renders j (E.insert_field "x" (E.int 1)) "{\"x\":1}"
+      })
+    })
+
+    describe "set_field (upsert)" (fun () -> {
+      test "replaces existing in place" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2), ("c", E.int 3)]
+        assert_renders j (E.set_field "b" (E.int 99)) "{\"a\":1,\"b\":99,\"c\":3}"
+      })
+      test "appends if missing" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2)]
+        assert_renders j (E.set_field "c" (E.int 3)) "{\"a\":1,\"b\":2,\"c\":3}"
+      })
+      test "into empty object" (fun () -> {
+        let j = E.object []
+        assert_renders j (E.set_field "x" (E.int 1)) "{\"x\":1}"
+      })
+      test "non-object input fails" (fun () ->
+        assert_err (run_t (E.set_field "x" (E.int 1)) (E.int 0)))
+    })
+
+    describe "map_object" (fun () -> {
+      test "uppercases every key" (fun () -> {
+        let j = E.object [("foo", E.int 1), ("bar", E.int 2)]
+        let upper = E.map_object (fun (k, v) -> (String.to_upper k, v))
+        assert_renders j upper "{\"FOO\":1,\"BAR\":2}"
+      })
+      test "can rewrite values too" (fun () -> {
+        let j = E.object [("a", E.int 1), ("b", E.int 2)]
+        let to_key_string = E.map_object (fun (k, _) -> (k, E.string k))
+        assert_renders j to_key_string "{\"a\":\"a\",\"b\":\"b\"}"
+      })
+      test "non-object input fails" (fun () ->
+        assert_err (run_t (E.map_object (fun (k, v) -> (k, v))) (E.int 1)))
+      test "empty object stays empty" (fun () -> {
+        let j = E.object []
+        let identity = E.map_object (fun (k, v) -> (k, v))
+        assert_renders j identity "{}"
+      })
+    })
+
+    describe "composition (the headline use case)" (fun () -> {
+      test "remove + rename + insert via |>" (fun () -> {
+        let j =
+          E.object [
+            ("password_hash", E.string "secret"),
+            ("name", E.string "Alice"),
+            ("manager", E.null),
+          ]
+        let edit =
+          fun jj ->
+            jj
+            |> E.remove_field "password_hash"
+            |> E.rename_field "manager" "supervisor"
+            |> E.insert_field "schema_version" (E.int 2)
+        assert_renders j edit "{\"name\":\"Alice\",\"supervisor\":null,\"schema_version\":2}"
+      })
+    })
+  })
+}

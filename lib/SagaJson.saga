@@ -1,17 +1,19 @@
-#@ JSON parsing.
+#@ JSON library top-level: the `Json` opaque type, the shared `Error` type,
+#@ and the decoder-running entry points.
 #@
-#@ Decoders are functions `Json -> a needs {Fail Error}`. Compose by ordinary
-#@ function call; failures short-circuit through the Fail handler.
-#@ Use `parse` to consume a JSON string and run a decoder in one step.
+#@ For encoding, see `SagaJson.Encode`. For decoding primitives and
+#@ combinators, see `SagaJson.Decode`.
 module SagaJson
 
-import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
+import Std.Base (Debug, Eq)
 import Std.Fail (Fail)
-import SagaJson.Parser (Value)
-import Std.Int
 import Std.List
+import Std.String
+import SagaJson.Parser (Value)
 
-#@ A parsed JSON value. Navigate with `field`, decode with `string`, `int`, etc.
+#@ A JSON value. Opaque so the internal representation can evolve.
+#@ Construct with `SagaJson.Encode` primitives; inspect with
+#@ `SagaJson.Decode` combinators.
 pub opaque type Json = Json Value
 
 impl Debug for Json {
@@ -31,39 +33,126 @@ handler to_result for Fail a {
   return v = Ok v
 }
 
-# --- Helpers ---
+# --- Opacity boundary helpers ---
+#
+# Library-internal: prefer `SagaJson.Encode.*` constructors and
+# `SagaJson.Decode.*` combinators for normal use. These exist so the
+# Encode/Decode submodules can cross the opacity boundary without
+# exposing the constructor publicly.
 
-fun unwrap : Json -> Value
-unwrap j = case j {
+#@ Wrap a `Value` as a `Json`. Library-internal; use `SagaJson.Encode`.
+pub fun from_value : Value -> Json
+from_value v = Json v
+
+#@ Unwrap a `Json` to its underlying `Value`. Library-internal; use
+#@ `SagaJson.Decode` for ordinary decoding.
+pub fun to_value : Json -> Value
+to_value j = case j {
   Json v -> v
-}
-
-fun classify : Value -> String
-classify v = case v {
-  VNull -> "null"
-  VBool _ -> "Bool"
-  VInt _ -> "Int"
-  VFloat _ -> "Float"
-  VString _ -> "String"
-  VArray _ -> "Array"
-  VObject _ -> "Object"
-}
-
-fun shape_err : String -> Json -> a needs {Fail Error}
-shape_err expected j = fail! (InvalidShape expected (classify (unwrap j)) [])
-
-fun prefix_path : String -> Error -> Error
-prefix_path seg e = case e {
-  InvalidShape exp found path -> InvalidShape exp found (seg :: path)
-  other -> other
 }
 
 # --- Entry points ---
 
+# --- Shared encoder/decoder options ---
+#
+# Options live in the root module because both encode and decode consume
+# them. Uniform knobs only — anything that names a specific field belongs
+# in a hand-written impl.
+
+#@ How record field names and variant names are transformed before
+#@ emission (encode) or matched against input (decode). Source
+#@ convention is snake_case Saga identifiers (the type-level Symbol
+#@ reflects the source name verbatim); `rename_all` is applied to that
+#@ source name symmetrically on both directions.
+pub type NameStyle =
+  | AsIs
+  | CamelCase
+  | KebabCase
+  | SnakeCase
+  | ScreamingSnakeCase
+
+#@ How sum-type variants are tagged in JSON.
+#@
+#@ - `ExternallyTagged` (default): `{"Variant": payload}` for variants
+#@    that carry a payload; unit variants emit as bare strings
+#@    (`"Admin"`) when `unit_variants_as_strings` is True (the default).
+#@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
+#@    both fields always emitted, including for unit (U1) variants where
+#@    `content_field` carries `null`.
+#@ - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
+#@    Only well-defined when the payload renders to a JSON object (single
+#@    record-valued variants) or `null` (unit variants). For primitive /
+#@    array payloads the encoder falls back to `ExternallyTagged` — same
+#@    restriction as serde.
+#@ - `Untagged`: emit the payload directly; variant identity is lost.
+pub type TagFormat =
+  | ExternallyTagged
+  | AdjacentlyTagged
+  | InternallyTagged
+  | Untagged
+
+#@ Uniform codec options. Shared between encode and decode so a single
+#@ `Options` value drives a symmetric round-trip. Construct with
+#@ record-update syntax: `{ default_options | rename_all: CamelCase }`.
+#@ Note: `omit_nothing` is encode-only (no-op on decode).
+pub record Options {
+  rename_all: NameStyle,
+  omit_nothing: Bool,
+  tag_format: TagFormat,
+  tag_field: String,
+  content_field: String,
+  unit_variants_as_strings: Bool,
+}
+
+#@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
+#@ externally-tagged sums with unit variants emitted as bare strings
+#@ (matching serde, kotlinx.serialization, and most other modern JSON
+#@ libraries). Set `unit_variants_as_strings: False` to recover the
+#@ legacy `{"Admin": null}` shape (or use the `as_tagged` strategy).
+pub val default_options = Options {
+  rename_all: AsIs,
+  omit_nothing: False,
+  tag_format: ExternallyTagged,
+  tag_field: "tag",
+  content_field: "content",
+  unit_variants_as_strings: True,
+}
+
+# --- Name-style helpers ---
+#
+# Library-internal. Both encode and decode apply this transform to the
+# source identifier reflected via `symbol_name`, giving symmetric
+# `rename_all` semantics in both directions.
+
+#@ Apply a NameStyle transform to a Saga source identifier (snake_case
+#@ by convention). Library-internal; called by both the encoder and the
+#@ decoder so a single Options value drives a symmetric round-trip.
+pub fun apply_name_style : NameStyle -> String -> String
+apply_name_style ns s = case ns {
+  AsIs -> s
+  SnakeCase -> s
+  CamelCase -> snake_to_camel s
+  KebabCase -> String.replace_all "_" "-" s
+  ScreamingSnakeCase -> String.to_upper s
+}
+
+fun snake_to_camel : String -> String
+snake_to_camel s = case String.split "_" s {
+  [] -> s
+  h :: rest -> h <> String.join "" (List.map capitalize rest)
+}
+
+fun capitalize : String -> String
+capitalize s = {
+  let n = String.length s
+  if n == 0 then s
+  else String.to_upper (String.slice 0 1 s) <> String.slice 1 (n - 1) s
+}
+
 #@ Parse a JSON string into a Json value, without applying a decoder.
 pub fun parse_string : String -> Result Json Error
 parse_string s = case SagaJson.Parser.parse s {
-  Ok v -> Ok (Json v)
+  Ok v -> Ok (from_value v)
   Err msg -> Err (InvalidJson msg)
 }
 
@@ -76,85 +165,4 @@ pub fun parse : (Json -> a needs {Fail Error}) -> String -> Result a Error
 parse decoder s = case parse_string s {
   Ok j -> run decoder j
   Err e -> Err e
-}
-
-# --- Primitive decoders ---
-
-#@ Decode a JSON string value.
-pub fun string : Json -> String needs {Fail Error}
-string j = case unwrap j {
-  VString s -> s
-  _ -> shape_err "String" j
-}
-
-#@ Decode a JSON integer value.
-pub fun int : Json -> Int needs {Fail Error}
-int j = case unwrap j {
-  VInt n -> n
-  _ -> fail! (InvalidShape "Int" (classify (unwrap j)) [])
-}
-
-#@ Decode a JSON float value. Accepts integers as floats.
-pub fun float : Json -> Float needs {Fail Error}
-float j = case unwrap j {
-  VFloat f -> f
-  VInt n -> Int.to_float n
-  _ -> shape_err "Float" j
-}
-
-#@ Decode a JSON boolean value.
-pub fun bool : Json -> Bool needs {Fail Error}
-bool j = case unwrap j {
-  VBool b -> b
-  _ -> shape_err "Bool" j
-}
-
-# --- Navigation ---
-
-fun lookup : String -> List (String, Value) -> Maybe Value
-lookup _ [] = Nothing
-lookup k ((k2, v) :: rest) = if k == k2 then Just v else lookup k rest
-
-#@ Navigate to a named field in a JSON object.
-pub fun field : String -> Json -> Json needs {Fail Error}
-field name j = case unwrap j {
-  VObject pairs -> case lookup name pairs {
-    Just v -> Json v
-    Nothing -> fail! (InvalidShape $"field '{name}'" "missing" [name])
-  }
-  _ -> fail! (InvalidShape $"Object with field '{name}'" (classify (unwrap j)) [])
-}
-
-#@ Navigate to a named field and apply `decoder` to it. Prefixes the
-#@ field name onto the path of any error raised inside `decoder`.
-pub fun at : String -> (Json -> a needs {Fail Error, ..e}) -> Json -> a needs {Fail Error, ..e}
-at name decoder j = decoder (field name j) with {
-  fail e = fail! (prefix_path name e)
-}
-
-# --- Combinators ---
-
-fun map_each : (Json -> a needs {Fail Error, ..e}) -> List Value -> List a needs {Fail Error, ..e}
-map_each f xs = case xs {
-  [] -> []
-  h :: t -> {
-    let v = f (Json h)
-    let rest = map_each f t
-    v :: rest
-  }
-}
-
-#@ Decode a JSON array, applying `decoder` to each element.
-pub fun list_of : (Json -> a needs {Fail Error, ..e}) -> Json -> List a needs {Fail Error, ..e}
-list_of decoder j = case unwrap j {
-  VArray items -> map_each decoder items
-  _ -> shape_err "Array" j
-}
-
-#@ Decode a JSON value that may be null. Returns Nothing for null,
-#@ Just (decoder value) otherwise.
-pub fun nullable : (Json -> a needs {Fail Error, ..e}) -> Json -> Maybe a needs {Fail Error, ..e}
-nullable decoder j = case unwrap j {
-  VNull -> Nothing
-  _ -> Just (decoder j)
 }

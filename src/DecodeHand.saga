@@ -1,0 +1,45 @@
+#@ Decoding JSON into Saga types by writing parser functions by hand.
+#@
+#@ Use this when you want full control over how a record is decoded — for
+#@ instance to handle an unusual JSON shape, accept multiple input formats
+#@ for the same field, or validate as you go. A decoder is just a function
+#@ `Json -> a needs {Fail Error}` built up from `D.string`, `D.int`, etc.
+#@ and the `D.at` / `D.list_of` / `D.nullable` combinators.
+module DecodeHand
+
+import Std.Fail (Fail)
+import SagaJson as J (Json)
+import SagaJson.Decode as D
+
+record Person {
+  name: String,
+  age: Int,
+  email: Maybe String,
+} deriving (Debug)
+
+# `D.at "field" decoder json` looks up "field" on the object and runs
+# `decoder` on the value. Combinators compose: `D.nullable D.string` is
+# itself a decoder for `Maybe String`.
+fun person_decoder : Json -> Person needs {Fail J.Error}
+person_decoder j = Person {
+  name: D.at "name" D.string j,
+  age: D.at "age" D.int j,
+  email: D.at "email" (D.nullable D.string) j,
+}
+
+val good_input = """{"name":"Alice","age":30,"email":"alice@example.com"}"""
+val no_email = """{"name":"Bob","age":25,"email":null}"""
+val wrong_type = """{"name":"Eve","age":"thirty","email":null}"""
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Decoding by hand ==="
+
+  # `J.parse decoder string` parses the string into Json and runs the
+  # decoder, returning Result a Error.
+  dbg (J.parse person_decoder good_input)
+  dbg (J.parse person_decoder no_email)
+
+  # Errors carry a path showing where decoding failed.
+  dbg (J.parse person_decoder wrong_type)
+}

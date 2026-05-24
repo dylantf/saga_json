@@ -1,0 +1,49 @@
+#@ Encoding Saga types to JSON using `deriving (ToJson)`.
+#@
+#@ Mirror of `DecodeDerive`. Add `ToJson` to your type's `deriving (...)`
+#@ clause and call `serialize`. Field names become JSON keys; ADT
+#@ constructors emit externally-tagged variants by default.
+module EncodeDerive
+
+import SagaJson.Encode as E (ToJson, serialize)
+
+record Person {
+  name: String,
+  age: Int,
+} deriving (Debug, ToJson)
+
+type Role =
+  | Admin
+  | Editor
+  | Viewer
+  deriving (Debug, ToJson)
+
+record Account {
+  person: Person,
+  role: Role,
+} deriving (Debug, ToJson)
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Encoding by derive ==="
+
+  dbg (serialize (Person { name: "Alice", age: 30 }))
+
+  # Unit constructor → bare JSON string ("Admin"). Payload-bearing
+  # variants still emit `{"VariantName": payload}` — the per-variant
+  # default matches serde / kotlinx. See EncodeDeriveCustom for the
+  # `as_enum` / `as_tagged` overrides if you want uniform shape.
+  dbg (serialize Admin)
+
+  # Nested record + ADT — all derived, composes automatically.
+  dbg (serialize (Account {
+    person: Person { name: "Alice", age: 30 },
+    role: Editor,
+  }))
+
+  # Tuples (arity 2..10) encode as positional JSON arrays. Element types
+  # need `ToJson`; nesting and composition with `Maybe` / `List` works.
+  dbg (serialize (1, "hello"))
+  dbg (serialize (1.5, 2.5, 3.5))
+  dbg (serialize (Just 1, Nothing : Maybe Int, "x"))
+}

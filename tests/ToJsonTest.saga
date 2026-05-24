@@ -1,0 +1,119 @@
+module ToJsonTest
+
+import Std.Test (Testing, Test, describe, test, assert_eq)
+import SagaJson.Encode as E (ToJson, serialize)
+
+# A small record + ADT-shaped wrapper to exercise hand-written impls without
+# leaning on Main's types (tests should stay independent of bin code).
+
+record Point {
+  x: Int,
+  y: Int,
+}
+
+impl ToJson for Point {
+  to_json_with _ p = E.object [
+    ("x", to_json p.x),
+    ("y", to_json p.y),
+  ]
+}
+
+record Polyline {
+  name: String,
+  closed: Bool,
+  pts: List Point,
+  label: Maybe String,
+}
+
+impl ToJson for Polyline {
+  to_json_with _ pl = E.object [
+    ("name", to_json pl.name),
+    ("closed", to_json pl.closed),
+    ("pts", to_json pl.pts),
+    ("label", to_json pl.label),
+  ]
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "ToJson" (fun () -> {
+    describe "primitive impls" (fun () -> {
+      test "String" (fun () -> assert_eq (serialize "hi") "\"hi\"")
+      test "Int" (fun () -> assert_eq (serialize 42) "42")
+      test "Float" (fun () -> assert_eq (serialize 1.5) "1.5")
+      test "Bool true" (fun () -> assert_eq (serialize True) "true")
+      test "Bool false" (fun () -> assert_eq (serialize False) "false")
+    })
+
+    describe "container impls" (fun () -> {
+      test "empty List Int" (fun () -> assert_eq (serialize ([] : List Int)) "[]")
+      test "List Int" (fun () -> assert_eq (serialize [1, 2, 3]) "[1,2,3]")
+      test "List String" (fun () ->
+        assert_eq (serialize ["a", "b"]) "[\"a\",\"b\"]")
+      test "List of List Int (nested container)" (fun () ->
+        assert_eq (serialize [[1, 2], [3]]) "[[1,2],[3]]")
+      test "Maybe Nothing" (fun () ->
+        assert_eq (serialize (Nothing : Maybe Int)) "null")
+      test "Maybe Just" (fun () ->
+        assert_eq (serialize (Just 7 : Maybe Int)) "7")
+      test "List of Maybe (composition)" (fun () ->
+        assert_eq
+          (serialize [Just 1, Nothing, Just 3])
+          "[1,null,3]")
+    })
+
+    describe "tuple impls" (fun () -> {
+      test "tuple-2 mixed types" (fun () ->
+        assert_eq (serialize (1, "hi")) "[1,\"hi\"]")
+      test "tuple-3 ints" (fun () ->
+        assert_eq (serialize (1, 2, 3)) "[1,2,3]")
+      test "tuple-4 mixed" (fun () ->
+        assert_eq (serialize (1, True, "x", 1.5)) "[1,true,\"x\",1.5]")
+      test "tuple-5" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5)) "[1,2,3,4,5]")
+      test "tuple-6" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6)) "[1,2,3,4,5,6]")
+      test "tuple-7" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7)) "[1,2,3,4,5,6,7]")
+      test "tuple-8" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7, 8)) "[1,2,3,4,5,6,7,8]")
+      test "tuple-9" (fun () ->
+        assert_eq (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9)) "[1,2,3,4,5,6,7,8,9]")
+      test "tuple-10" (fun () ->
+        assert_eq
+          (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+          "[1,2,3,4,5,6,7,8,9,10]")
+      test "nested tuple" (fun () ->
+        assert_eq (serialize ((1, 2), (3, 4))) "[[1,2],[3,4]]")
+      test "tuple with Maybe" (fun () ->
+        assert_eq
+          (serialize (Just 1, Nothing : Maybe Int, "x"))
+          "[1,null,\"x\"]")
+    })
+
+    describe "hand-written record impls" (fun () -> {
+      test "flat record" (fun () ->
+        assert_eq
+          (serialize (Point { x: 1, y: 2 }))
+          "{\"x\":1,\"y\":2}")
+      test "record with nested list of records and Maybe" (fun () ->
+        assert_eq
+          (serialize (Polyline {
+            name: "edge",
+            closed: False,
+            pts: [Point { x: 0, y: 0 }, Point { x: 1, y: 1 }],
+            label: Just "hi"
+          }))
+          "{\"name\":\"edge\",\"closed\":false,\"pts\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":1}],\"label\":\"hi\"}")
+      test "record with Nothing renders null for the field" (fun () ->
+        assert_eq
+          (serialize (Polyline {
+            name: "e",
+            closed: True,
+            pts: [],
+            label: Nothing
+          }))
+          "{\"name\":\"e\",\"closed\":true,\"pts\":[],\"label\":null}")
+    })
+  })
+}
