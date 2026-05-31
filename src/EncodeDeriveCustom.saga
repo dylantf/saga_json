@@ -1,13 +1,19 @@
-#@ Encoding with `deriving (ToJson)` plus customization via Options.
+#@ Encoding with `deriving (ToJson)` plus customization via the
+#@ `JsonOptions` effect.
 #@
-#@ Same Options shape as decoding — round-trip works when both sides use
-#@ the same Options. Useful for matching foreign API conventions:
-#@ camelCase keys, adjacent tagging, or omitting absent fields entirely.
+#@ Instead of threading an `Options` argument through every call, install
+#@ a `JsonOptions` handler at the call boundary. `serialize_with` reads
+#@ from the ambient handler; one `with h` covers any number of nested
+#@ serializations.
 module EncodeDeriveCustom
 
 import SagaJson as J (
-  Options,
-  default_options,
+  json_opts,
+  rename_keys,
+  omit_nothings,
+  tag_format,
+  tag_field,
+  content_field,
   CamelCase,
   AdjacentlyTagged,
 )
@@ -41,43 +47,52 @@ pub fun run : Unit -> Unit
 run () = {
   dbg "=== Encoding by derive with customization ==="
 
-  # rename_all: emit camelCase keys for snake_case fields.
-  let camel_opts = { default_options | rename_all: CamelCase }
-  dbg (E.serialize_with camel_opts (User {
-    first_name: "Ada",
-    last_name: "Lovelace",
-  }))
+  # rename_all: emit camelCase keys for snake_case fields. Build a
+  # handler with json_opts and attach it to the block via `with`.
+  let camel = json_opts (rename_keys CamelCase)
+  {
+    dbg (serialize_with (User { first_name: "Ada", last_name: "Lovelace" }))
+  } with camel
 
-  # tag_format: emit adjacently-tagged ADT variants instead of the
-  # default external tag.
-  let adjacent_opts = { default_options |
-    tag_format: AdjacentlyTagged,
-    tag_field: "tag",
-    content_field: "value",
-  }
-  dbg (E.serialize_with adjacent_opts Active)
+  # tag_format: adjacently-tagged ADT variants. Setters compose with
+  # `>>` so a multi-knob policy fits on one line.
+  let adjacent = json_opts (
+    tag_format AdjacentlyTagged
+    >> tag_field "tag"
+    >> content_field "value"
+  )
+  {
+    dbg (serialize_with Active)
+  } with adjacent
 
-  # omit_nothing: drop `Nothing`-valued `Maybe` fields from the output.
-  # Warning: the resulting JSON does NOT round-trip through
-  # `deserialize_with` on the same Options — the decoder treats a
-  # missing field as an error because it can't see that the target
-  # field's type is a `Maybe` that would accept absence as `Nothing`.
-  let omit_opts = { default_options | omit_nothing: True }
-  dbg (E.serialize_with omit_opts (Notification {
-    message: "hello",
-    details: Nothing,
-  }))
+  # omit_nothings: drop `Nothing`-valued `Maybe` fields. Warning: the
+  # resulting JSON does NOT round-trip through `deserialize_with` on
+  # the same options — the decoder treats a missing field as an error.
+  let omit = json_opts omit_nothings
+  {
+    dbg (serialize_with (Notification { message: "hello", details: Nothing }))
+  } with omit
+
+  # Multiple serializations under one handler — the case the ambient
+  # JsonOptions effect is built for. One policy covers them all.
+  let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
+  {
+    dbg (serialize_with (User { first_name: "Grace", last_name: "Hopper" }))
+    dbg (serialize_with (Notification { message: "ok", details: Nothing }))
+    dbg (serialize_with Active)
+  } with api_shape
 
   # as_enum: drop any payload, emit only the variant tag as a bare
-  # string. Lossy by design — useful for analytics / logging /
-  # foreign-API enum compatibility. Note `Login 42` discards the `42`.
-  dbg (render (as_enum default_options Heartbeat))   # "Heartbeat"
-  dbg (render (as_enum default_options (Login 42)))  # "Login"
+  # string. Lossy by design.
+  {
+    dbg (render (as_enum Heartbeat))
+    dbg (render (as_enum (Login 42)))
+  } with J.json_defaults
 
   # as_tagged: force the externally-tagged `{"V": payload}` shape
-  # uniformly, including for unit variants. Recovers the legacy
-  # pre-default-refinement shape. Round-trips losslessly via
-  # `as_tagged_from` on the decode side.
-  dbg (render (as_tagged default_options Heartbeat))   # {"Heartbeat":null}
-  dbg (render (as_tagged default_options (Login 42)))  # {"Login":42}
+  # uniformly, including for unit variants.
+  {
+    dbg (render (as_tagged Heartbeat))
+    dbg (render (as_tagged (Login 42)))
+  } with J.json_defaults
 }

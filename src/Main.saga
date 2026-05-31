@@ -1,27 +1,11 @@
 #@ Demos for saga_json
 #@
-#@ DecodeHand: write a parser function by hand
-#@ DecodeDerive: `deriving (FromJson)` + `deserialize`
-#@ DecodeDeriveCustom: same, but with Options for renaming/tag format
-#@
-#@ EncodeHand: write an `impl ToJson` by hand
-#@ EncodeDerive: `deriving (ToJson)` + `serialize`
-#@ EncodeDeriveCustom: same, but with Options for renaming/tag format
+#@ EncodeDeriveCustom: deriving (ToJson) + the JsonOptions effect for
+#@ renaming, tag format, omit-nothings, etc.
 module Main
 
-import DecodeDerive
-import DecodeDeriveCustom
-
-import DecodeHand
-import EncodeDerive
 import EncodeDeriveCustom
-import EncodeHand
 
 main () = {
-  DecodeHand.run ()
-  DecodeDerive.run ()
-  DecodeDeriveCustom.run ()
-  EncodeHand.run ()
-  EncodeDerive.run ()
   EncodeDeriveCustom.run ()
 }

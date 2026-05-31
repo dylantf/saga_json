@@ -19,7 +19,8 @@ import SagaJson (
   NameStyle,
   TagFormat,
   Options,
-  WithOptions,
+  JsonOptions,
+  json_defaults,
   apply_name_style
 )
 import SagaJson as J
@@ -115,10 +116,11 @@ unicode_escape c = {
 
 # --- ToJson trait + helpers ---
 #
-# The public `ToJson` trait has the two-method shape from
-# `saga/examples/99k`. Library code provides building-block impls for
-# `to_json_with`; the default body for `to_json` forwards through
-# `default_options`. Hand-written user impls only need `to_json_with`.
+# The public `ToJson` trait carries the `JsonOptions` effect on its one
+# method. Impls that don't need to read any knob just ignore the effect
+# (it's satisfied trivially by `get_json_options!` never being called);
+# impls that do read a knob call `get_json_options! ()` to pull the
+# ambient `Options` value at the call site.
 #
 # Three additional traits (`ToJsonFields`, `ToJsonArgs`, `VariantPayload`)
 # are library-internal and handle the three syntactic positions a Rep can
@@ -126,25 +128,23 @@ unicode_escape c = {
 # them gives compile-time non-overlap. See the "Why four traits" section
 # in `docs/planning/serialization.md`.
 
-#@ Types that can be encoded as JSON. Hand-write `to_json_with` for your
-#@ own records and ADTs (the `to_json` convenience is inherited from the
-#@ trait default), or write `deriving (ToJson)`.
+#@ Types that can be encoded as JSON. Hand-write `to_json` for your own
+#@ records and ADTs, or write `deriving (ToJson)`. Inside the impl, call
+#@ `get_json_options!` if you need to consult a knob.
 pub trait ToJson a {
-  fun to_json_with : Options -> a -> Json
-  fun to_json : a -> Json
-  to_json x = to_json_with SagaJson.default_options x
+  fun to_json : a -> Json needs {JsonOptions}
 }
 
 # Library-internal: produces a list of (field-name, value) pairs. Used by
 # `Record` to assemble its inner object.
 trait ToJsonFields a {
-  fun to_fields : Options -> a -> List (String, Json)
+  fun to_fields : a -> List (String, Json) needs {JsonOptions}
 }
 
 # Library-internal: produces a list of positional JSON args. Used by a
 # multi-arg `VariantPayload`.
 trait ToJsonArgs a {
-  fun to_args : Options -> a -> List Json
+  fun to_args : a -> List Json needs {JsonOptions}
 }
 
 # Library-internal: produces the payload Json that follows the variant
@@ -153,94 +153,92 @@ trait ToJsonArgs a {
 # decide whether to emit the variant as a bare string (`"Admin"`) or
 # the wrapped form (`{"Admin": null}`).
 trait VariantPayload a {
-  fun payload_json : Options -> a -> Json
+  fun payload_json : a -> Json needs {JsonOptions}
   fun is_unit_payload : a -> Bool
 }
 
 # --- Primitive + container impls (ToJson) ---
 
 impl ToJson for String {
-  to_json_with _ s = string s
+  to_json s = string s
 }
 
 impl ToJson for Int {
-  to_json_with _ n = int n
+  to_json n = int n
 }
 
 impl ToJson for Float {
-  to_json_with _ f = float f
+  to_json f = float f
 }
 
 impl ToJson for Bool {
-  to_json_with _ b = bool b
+  to_json b = bool b
 }
 
-impl ToJson for List a where {a: ToJson} {
-  to_json_with opts xs = array (List.map (fun x -> to_json_with opts x) xs)
+impl ToJson for List a where {a: ToJson} needs {JsonOptions} {
+  to_json xs = {
+    let opts = get_json_options! ()
+    array (List.map (fun x -> to_json x with {
+      get_json_options () = resume opts
+    }) xs)
+  }
 }
 
-impl ToJson for Maybe a where {a: ToJson} {
-  to_json_with opts m = case m {
+impl ToJson for Maybe a where {a: ToJson} needs {JsonOptions} {
+  to_json m = case m {
     Nothing -> null
-    Just x -> to_json_with opts x
+    Just x -> to_json x
   }
 }
 
 # Tuple impls (arity 2..10). Encoded as positional JSON arrays.
-impl ToJson for (a, b) where {a: ToJson, b: ToJson} {
-  to_json_with opts t = {
+impl ToJson for (a, b) where {a: ToJson, b: ToJson} needs {JsonOptions} {
+  to_json t = {
     let (x1, x2) = t
-    array [to_json_with opts x1, to_json_with opts x2]
+    array [to_json x1, to_json x2]
   }
 }
 
-impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} {
-  to_json_with opts t = {
+impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3) = t
-    array [to_json_with opts x1, to_json_with opts x2, to_json_with opts x3]
+    array [to_json x1, to_json x2, to_json x3]
   }
 }
 
-impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} {
-  to_json_with opts t = {
+impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4) = t
-    array [
-      to_json_with opts x1, to_json_with opts x2,
-      to_json_with opts x3, to_json_with opts x4,
-    ]
+    array [to_json x1, to_json x2, to_json x3, to_json x4]
   }
 }
 
 impl ToJson for (a, b, c, d, e)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} {
-  to_json_with opts t = {
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson}
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5) = t
-    array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5,
-    ]
+    array [to_json x1, to_json x2, to_json x3, to_json x4, to_json x5]
   }
 }
 
 impl ToJson for (a, b, c, d, e, f)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} {
-  to_json_with opts t = {
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson}
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5, x6) = t
-    array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
-    ]
+    array [to_json x1, to_json x2, to_json x3, to_json x4, to_json x5, to_json x6]
   }
 }
 
 impl ToJson for (a, b, c, d, e, f, g)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson} {
-  to_json_with opts t = {
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson}
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7) = t
     array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
-      to_json_with opts x7,
+      to_json x1, to_json x2, to_json x3, to_json x4,
+      to_json x5, to_json x6, to_json x7,
     ]
   }
 }
@@ -249,13 +247,13 @@ impl ToJson for (a, b, c, d, e, f, g, h)
   where {
     a: ToJson, b: ToJson, c: ToJson, d: ToJson,
     e: ToJson, f: ToJson, g: ToJson, h: ToJson,
-  } {
-  to_json_with opts t = {
+  }
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8) = t
     array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
-      to_json_with opts x7, to_json_with opts x8,
+      to_json x1, to_json x2, to_json x3, to_json x4,
+      to_json x5, to_json x6, to_json x7, to_json x8,
     ]
   }
 }
@@ -264,13 +262,13 @@ impl ToJson for (a, b, c, d, e, f, g, h, i)
   where {
     a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
     f: ToJson, g: ToJson, h: ToJson, i: ToJson,
-  } {
-  to_json_with opts t = {
+  }
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
     array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
-      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
+      to_json x1, to_json x2, to_json x3, to_json x4, to_json x5,
+      to_json x6, to_json x7, to_json x8, to_json x9,
     ]
   }
 }
@@ -279,14 +277,13 @@ impl ToJson for (a, b, c, d, e, f, g, h, i, j)
   where {
     a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
     f: ToJson, g: ToJson, h: ToJson, i: ToJson, j: ToJson,
-  } {
-  to_json_with opts t = {
+  }
+  needs {JsonOptions} {
+  to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
     array [
-      to_json_with opts x1, to_json_with opts x2, to_json_with opts x3,
-      to_json_with opts x4, to_json_with opts x5, to_json_with opts x6,
-      to_json_with opts x7, to_json_with opts x8, to_json_with opts x9,
-      to_json_with opts x10,
+      to_json x1, to_json x2, to_json x3, to_json x4, to_json x5,
+      to_json x6, to_json x7, to_json x8, to_json x9, to_json x10,
     ]
   }
 }
@@ -299,29 +296,31 @@ impl ToJson for (a, b, c, d, e, f, g, h, i, j)
 
 # ToJson assembles complete Json values. The Leaf-as-ToJson impl is the
 # passthrough used when a leaf sits inside a Labeled in a record field.
-impl ToJson for Leaf a where {a: ToJson} {
-  to_json_with opts (Leaf x) = to_json_with opts x
+impl ToJson for Leaf a where {a: ToJson} needs {JsonOptions} {
+  to_json (Leaf x) = to_json x
 }
 
-impl ToJson for Or l r where {l: ToJson, r: ToJson} {
-  to_json_with opts v = case v {
-    Or_Left x -> to_json_with opts x
-    Or_Right x -> to_json_with opts x
+impl ToJson for Or l r where {l: ToJson, r: ToJson} needs {JsonOptions} {
+  to_json v = case v {
+    Or_Left x -> to_json x
+    Or_Right x -> to_json x
   }
 }
 
-impl ToJson for Record a where {a: ToJsonFields} {
-  to_json_with opts (Record _ inner) = {
-    let fields = to_fields opts inner
-    let kept = if opts.omit_nothing then drop_null_fields fields else fields
+impl ToJson for Record a where {a: ToJsonFields} needs {JsonOptions} {
+  to_json (Record _ inner) = {
+    let opts = get_json_options! ()
+    let fields = to_fields inner
+    let kept = if opts.omit_nothings then drop_null_fields fields else fields
     object kept
   }
 }
 
-impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload} {
-  to_json_with opts (Variant payload) = {
+impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload} needs {JsonOptions} {
+  to_json (Variant payload) = {
+    let opts = get_json_options! ()
     let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
-    let p = payload_json opts payload
+    let p = payload_json payload
     case opts.tag_format {
       ExternallyTagged ->
         if opts.unit_variants_as_strings && is_unit_payload payload
@@ -345,56 +344,57 @@ tag_internally tag_field name payload = case to_value payload {
   _ -> object [(name, payload)]
 }
 
-impl ToJson for Adt a where {a: ToJson} {
-  to_json_with opts (Adt _ inner) = to_json_with opts inner
+impl ToJson for Adt a where {a: ToJson} needs {JsonOptions} {
+  to_json (Adt _ inner) = to_json inner
 }
 
 # ToJsonFields: record-interior dispatch.
-impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
-  to_fields opts (Labeled x) = {
+impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} needs {JsonOptions} {
+  to_fields (Labeled x) = {
+    let opts = get_json_options! ()
     let name = symbol_name (Proxy : Proxy n)
-    [(apply_name_style opts.rename_all name, to_json_with opts x)]
+    [(apply_name_style opts.rename_all name, to_json x)]
   }
 }
 
-impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {
-  to_fields opts (And l r) = List.append (to_fields opts l) (to_fields opts r)
+impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} needs {JsonOptions} {
+  to_fields (And l r) = List.append (to_fields l) (to_fields r)
 }
 
 # ToJsonArgs: variant-arg-list dispatch.
-impl ToJsonArgs for Leaf a where {a: ToJson} {
-  to_args opts (Leaf x) = [to_json_with opts x]
+impl ToJsonArgs for Leaf a where {a: ToJson} needs {JsonOptions} {
+  to_args (Leaf x) = [to_json x]
 }
 
-impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
-  to_args opts (And l r) = List.append (to_args opts l) (to_args opts r)
+impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} needs {JsonOptions} {
+  to_args (And l r) = List.append (to_args l) (to_args r)
 }
 
 # VariantPayload: dispatch by arity. U1 emits null, Leaf emits the
 # unwrapped value, And-of-args emits a JSON array.
 impl VariantPayload for U1 {
-  payload_json _ _ = null
+  payload_json _ = null
   is_unit_payload _ = True
 }
 
-impl VariantPayload for Leaf a where {a: ToJson} {
-  payload_json opts (Leaf x) = to_json_with opts x
+impl VariantPayload for Leaf a where {a: ToJson} needs {JsonOptions} {
+  payload_json (Leaf x) = to_json x
   is_unit_payload _ = False
 }
 
-impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
-  payload_json opts v = case v {
-    And l r -> array (List.append (to_args opts l) (to_args opts r))
+impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} needs {JsonOptions} {
+  payload_json v = case v {
+    And l r -> array (List.append (to_args l) (to_args r))
   }
   is_unit_payload _ = False
 }
 
-# `omit_nothing` is applied after the fact, on the produced fields. The
+# `omit_nothings` is applied after the fact, on the produced fields. The
 # building-block impls don't know a field's source type, only its rendered
 # Json: a `Maybe Nothing` has already become `null` by the time `Record`
 # assembles its fields, so we just filter null values out. A user impl
 # that deliberately emits `null` for a non-Maybe field will also be
-# dropped under `omit_nothing: True`. This is a documented limitation.
+# dropped under `omit_nothings: True`. This is a documented limitation.
 fun drop_null_fields : List (String, Json) -> List (String, Json)
 drop_null_fields pairs = List.filter not_null_pair pairs
 
@@ -406,22 +406,30 @@ not_null_pair (_, j) = case to_value j {
 
 # --- Layer-3 helpers ---
 
-#@ Encode a value to a compact JSON string using default options.
-#@ Equivalent to `render (to_json x)`.
+#@ Encode a value to a compact JSON string using the canonical defaults.
+#@ Installs `json_defaults` inline, so the caller doesn't need to set up
+#@ a `JsonOptions` handler. For shared-options-across-many-serializations
+#@ use `serialize_with` under a `json_opts` boundary.
 pub fun serialize : a -> String where {a: ToJson}
-serialize x = render (to_json x)
+serialize x = serialize_with x with json_defaults
 
-#@ Encode a value to a compact JSON string using the given options.
-#@ Equivalent to `render (to_json_with opts x)`.
-pub fun serialize_with : Options -> a -> String where {a: ToJson}
-serialize_with opts x = render (to_json_with opts x)
+#@ Encode a value to a compact JSON string, reading the active options
+#@ from the ambient `JsonOptions` handler. Install one with
+#@ `json_defaults`, `json_opts`, or `json_opts_from`:
+#@
+#@   {
+#@     EventBus.publish! "users.created" (serialize_with user)
+#@     AuditLog.record!  "user_signup"   (serialize_with prefs)
+#@   } with json_opts (rename_keys CamelCase)
+pub fun serialize_with : a -> String needs {JsonOptions} where {a: ToJson}
+serialize_with x = render (to_json x)
 
 #@ Derive-then-tweak escape hatch. Calls the Generic-derived encoding
 #@ explicitly, so a hand-written `impl ToJson` can start from the derived
 #@ shape and post-process. Without this, the trait dispatch can't reach
 #@ the derived impl, since the hand-written impl shadows it.
-pub fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
-derive_with opts x = to_json_with opts (to x)
+pub fun derive : a -> Json needs {JsonOptions} where {a: Generic r, r: ToJson}
+derive x = to_json (to x)
 
 #@ Encoding strategy: emit every variant as a bare JSON string of its
 #@ tag name (e.g. `"Admin"`), dropping any payload data. Lossy by
@@ -432,23 +440,27 @@ derive_with opts x = to_json_with opts (to x)
 #@ The symmetric decoder `SagaJson.Decode.as_enum_from` round-trips
 #@ unit variants but fails on payload-bearing ones — there's no payload
 #@ data in `"Elevated"` to reconstruct from.
-pub fun as_enum : Options -> a -> Json where {a: ToJson}
-as_enum opts x = case to_value (to_json_with opts x) {
-  VString _ -> to_json_with opts x
+pub fun as_enum : a -> Json needs {JsonOptions} where {a: ToJson}
+as_enum x = case to_value (to_json x) {
+  VString _ -> to_json x
   VObject pairs -> case pairs {
     (name, _) :: _ -> string name
-    [] -> to_json_with opts x
+    [] -> to_json x
   }
-  _ -> to_json_with opts x
+  _ -> to_json x
 }
 
 #@ Encoding strategy: force the externally-tagged `{"Variant": payload}`
 #@ shape for unit variants too. Recovers the pre-default-refinement
 #@ behavior of `{"Admin": null}`. Drives the encode through
-#@ `unit_variants_as_strings: False` regardless of the caller's Options.
-pub fun as_tagged : Options -> a -> Json where {a: ToJson}
-as_tagged opts x =
-  to_json_with { opts | unit_variants_as_strings: False } x
+#@ `unit_variants_as_strings: False` regardless of the ambient Options.
+pub fun as_tagged : a -> Json needs {JsonOptions} where {a: ToJson}
+as_tagged x = {
+  let cur = get_json_options! ()
+  to_json x with {
+    get_json_options () = resume { cur | unit_variants_as_strings: False }
+  }
+}
 
 # --- Post-process combinators ---
 #
@@ -577,38 +589,4 @@ pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) 
 map_object f j = {
   let pairs = expect_object j
   from_value (VObject (do_map_object f pairs))
-}
-
-# --- Fluent encoder builder ---
-#
-# `encoder x` wraps a value with `default_options`, then a chain of
-# `WithOptions` setters (`rename_keys`, `omit_nothing`, ...) adjusts
-# the options. The `ToJson` impl for `Encoder a` substitutes the
-# accumulated options when the chain lands on `to_json` / `serialize`,
-# so the builder collapses naturally through trait dispatch.
-
-#@ A typed value paired with the Options that should drive its
-#@ encoding. Build with `encoder` or `encode_with`, refine with the
-#@ `WithOptions` setters, then collapse via `to_json` or `serialize`.
-pub record Encoder a {
-  value: a,
-  options: Options,
-}
-
-#@ Wrap a value with `default_options`. The head of a fluent encode
-#@ chain: `value |> encoder |> rename_keys CamelCase |> serialize`.
-pub fun encoder : a -> Encoder a where {a: ToJson}
-encoder x = Encoder { value: x, options: SagaJson.default_options }
-
-#@ Wrap a value with a pre-built Options record. The shortcut when
-#@ you already have an Options value you want to reuse.
-pub fun encode_with : a -> Options -> Encoder a where {a: ToJson}
-encode_with x opts = Encoder { value: x, options: opts }
-
-impl WithOptions for Encoder a where {a: ToJson} {
-  map_options f e = Encoder { value: e.value, options: f e.options }
-}
-
-impl ToJson for Encoder a where {a: ToJson} {
-  to_json_with _ e = to_json_with e.options e.value
 }

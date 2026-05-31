@@ -15,7 +15,8 @@ import SagaJson (
   to_value,
   from_value,
   Options,
-  WithOptions,
+  JsonOptions,
+  json_defaults,
   apply_name_style,
   ExternallyTagged,
   AdjacentlyTagged,
@@ -135,24 +136,20 @@ nullable decoder j = case to_value j {
 
 # --- FromJson trait + helpers ---
 #
-# Mirrors `SagaJson.Encode.ToJson`. Two-method shape: hand-written user
-# impls only need `from_json_with`, and `from_json` is inherited from the
-# default body. The default qualifies `default_options` with the absolute
-# module path; trait default bodies don't carry their declaration-site
-# scope, so the unqualified name wouldn't resolve at the impl site.
+# Mirrors `SagaJson.Encode.ToJson`. The trait's one method carries both
+# `Fail Error` (for shape mismatches) and `JsonOptions` (for ambient
+# knobs). Impls that don't read any knob just ignore the effect; impls
+# that do call `get_json_options! ()` at the point they need it.
 #
 # Three library-internal helper traits: `FromJsonFields`, `FromJsonArgs`,
 # `FromVariantPayload`. These mirror the encode-side split (record
-# interior, variant arg list, variant payload). The encode-side
-# `VariantPayload` method is `payload_json`; the from-direction method
-# here is `decode_payload`, so the two names don't collide in scope.
+# interior, variant arg list, variant payload).
 
-#@ Types that can be decoded from JSON. Hand-write `from_json_with` for
-#@ your own records and ADTs, or write `deriving (FromJson)`.
+#@ Types that can be decoded from JSON. Hand-write `from_json` for your
+#@ own records and ADTs, or write `deriving (FromJson)`. Inside the impl,
+#@ call `get_json_options!` if you need to consult a knob.
 pub trait FromJson a {
-  fun from_json_with : Options -> Json -> a needs {Fail Error}
-  fun from_json : Json -> a needs {Fail Error}
-  from_json j = from_json_with SagaJson.default_options j
+  fun from_json : Json -> a needs {Fail Error, JsonOptions}
 }
 
 # Library-internal: looks up the trait's required keys in an input field
@@ -160,14 +157,14 @@ pub trait FromJson a {
 # reflects its symbol and searches the input. Missing-field failures land
 # naturally at the `Labeled` level.
 trait FromJsonFields a {
-  fun from_fields : Options -> List (String, Json) -> a needs {Fail Error}
+  fun from_fields : List (String, Json) -> a needs {Fail Error, JsonOptions}
 }
 
 # Library-internal: consumes positional variant args from the head of the
 # input list. Returns (decoded value, residue). `And` chains via the
 # returned residue.
 trait FromJsonArgs a {
-  fun from_args : Options -> List Json -> (a, List Json) needs {Fail Error}
+  fun from_args : List Json -> (a, List Json) needs {Fail Error, JsonOptions}
 }
 
 # Library-internal: decodes the payload Json that followed the variant
@@ -175,34 +172,34 @@ trait FromJsonArgs a {
 # TagFormat). `U1` from VNull, `Leaf` from a single value, `And-of-Leaves`
 # from a VArray.
 trait FromVariantPayload a {
-  fun decode_payload : Options -> Json -> a needs {Fail Error}
+  fun decode_payload : Json -> a needs {Fail Error, JsonOptions}
   fun is_unit_payload : a -> Bool
 }
 
 # --- Primitive + container impls (FromJson) ---
 
-impl FromJson for String needs {Fail Error} {
-  from_json_with _ j = string j
+impl FromJson for String needs {Fail Error, JsonOptions} {
+  from_json j = string j
 }
 
-impl FromJson for Int needs {Fail Error} {
-  from_json_with _ j = int j
+impl FromJson for Int needs {Fail Error, JsonOptions} {
+  from_json j = int j
 }
 
-impl FromJson for Float needs {Fail Error} {
-  from_json_with _ j = float j
+impl FromJson for Float needs {Fail Error, JsonOptions} {
+  from_json j = float j
 }
 
-impl FromJson for Bool needs {Fail Error} {
-  from_json_with _ j = bool j
+impl FromJson for Bool needs {Fail Error, JsonOptions} {
+  from_json j = bool j
 }
 
-impl FromJson for List a where {a: FromJson} needs {Fail Error} {
-  from_json_with opts j = list_of (fun item -> from_json_with opts item) j
+impl FromJson for List a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = list_of (fun item -> from_json item) j
 }
 
-impl FromJson for Maybe a where {a: FromJson} needs {Fail Error} {
-  from_json_with opts j = nullable (fun v -> from_json_with opts v) j
+impl FromJson for Maybe a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = nullable (fun v -> from_json v) j
 }
 
 # Tuple impls (arity 2..10). Decoded from positional JSON arrays. The
@@ -217,41 +214,36 @@ tuple_items expected j = case to_value j {
   other -> fail! (InvalidShape $"Array of {show expected}" (classify other) [])
 }
 
-impl FromJson for (a, b) where {a: FromJson, b: FromJson} needs {Fail Error} {
-  from_json_with opts j = case tuple_items 2 j {
-    [j1, j2] -> (from_json_with opts j1, from_json_with opts j2)
+impl FromJson for (a, b) where {a: FromJson, b: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 2 j {
+    [j1, j2] -> (from_json j1, from_json j2)
     _ -> fail! (InvalidShape "Array of 2" "wrong length" [])
   }
 }
 
 impl FromJson for (a, b, c)
-  where {a: FromJson, b: FromJson, c: FromJson} needs {Fail Error} {
-  from_json_with opts j = case tuple_items 3 j {
-    [j1, j2, j3] ->
-      (from_json_with opts j1, from_json_with opts j2, from_json_with opts j3)
+  where {a: FromJson, b: FromJson, c: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 3 j {
+    [j1, j2, j3] -> (from_json j1, from_json j2, from_json j3)
     _ -> fail! (InvalidShape "Array of 3" "wrong length" [])
   }
 }
 
 impl FromJson for (a, b, c, d)
   where {a: FromJson, b: FromJson, c: FromJson, d: FromJson}
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 4 j {
-    [j1, j2, j3, j4] -> (
-      from_json_with opts j1, from_json_with opts j2,
-      from_json_with opts j3, from_json_with opts j4,
-    )
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 4 j {
+    [j1, j2, j3, j4] -> (from_json j1, from_json j2, from_json j3, from_json j4)
     _ -> fail! (InvalidShape "Array of 4" "wrong length" [])
   }
 }
 
 impl FromJson for (a, b, c, d, e)
   where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson}
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 5 j {
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 5 j {
     [j1, j2, j3, j4, j5] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5,
+      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
     )
     _ -> fail! (InvalidShape "Array of 5" "wrong length" [])
   }
@@ -262,11 +254,11 @@ impl FromJson for (a, b, c, d, e, f)
     a: FromJson, b: FromJson, c: FromJson,
     d: FromJson, e: FromJson, f: FromJson,
   }
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 6 j {
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 6 j {
     [j1, j2, j3, j4, j5, j6] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
+      from_json j1, from_json j2, from_json j3,
+      from_json j4, from_json j5, from_json j6,
     )
     _ -> fail! (InvalidShape "Array of 6" "wrong length" [])
   }
@@ -277,12 +269,11 @@ impl FromJson for (a, b, c, d, e, f, g)
     a: FromJson, b: FromJson, c: FromJson, d: FromJson,
     e: FromJson, f: FromJson, g: FromJson,
   }
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 7 j {
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 7 j {
     [j1, j2, j3, j4, j5, j6, j7] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
-      from_json_with opts j7,
+      from_json j1, from_json j2, from_json j3, from_json j4,
+      from_json j5, from_json j6, from_json j7,
     )
     _ -> fail! (InvalidShape "Array of 7" "wrong length" [])
   }
@@ -293,12 +284,11 @@ impl FromJson for (a, b, c, d, e, f, g, h)
     a: FromJson, b: FromJson, c: FromJson, d: FromJson,
     e: FromJson, f: FromJson, g: FromJson, h: FromJson,
   }
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 8 j {
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 8 j {
     [j1, j2, j3, j4, j5, j6, j7, j8] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
-      from_json_with opts j7, from_json_with opts j8,
+      from_json j1, from_json j2, from_json j3, from_json j4,
+      from_json j5, from_json j6, from_json j7, from_json j8,
     )
     _ -> fail! (InvalidShape "Array of 8" "wrong length" [])
   }
@@ -309,12 +299,11 @@ impl FromJson for (a, b, c, d, e, f, g, h, i)
     a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
     f: FromJson, g: FromJson, h: FromJson, i: FromJson,
   }
-  needs {Fail Error} {
-  from_json_with opts j = case tuple_items 9 j {
+  needs {Fail Error, JsonOptions} {
+  from_json j = case tuple_items 9 j {
     [j1, j2, j3, j4, j5, j6, j7, j8, j9] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
-      from_json_with opts j7, from_json_with opts j8, from_json_with opts j9,
+      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
+      from_json j6, from_json j7, from_json j8, from_json j9,
     )
     _ -> fail! (InvalidShape "Array of 9" "wrong length" [])
   }
@@ -325,13 +314,11 @@ impl FromJson for (a, b, c, d, e, f, g, h, i, j)
     a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
     f: FromJson, g: FromJson, h: FromJson, i: FromJson, j: FromJson,
   }
-  needs {Fail Error} {
-  from_json_with opts json = case tuple_items 10 json {
+  needs {Fail Error, JsonOptions} {
+  from_json json = case tuple_items 10 json {
     [j1, j2, j3, j4, j5, j6, j7, j8, j9, j10] -> (
-      from_json_with opts j1, from_json_with opts j2, from_json_with opts j3,
-      from_json_with opts j4, from_json_with opts j5, from_json_with opts j6,
-      from_json_with opts j7, from_json_with opts j8, from_json_with opts j9,
-      from_json_with opts j10,
+      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
+      from_json j6, from_json j7, from_json j8, from_json j9, from_json j10,
     )
     _ -> fail! (InvalidShape "Array of 10" "wrong length" [])
   }
@@ -345,8 +332,8 @@ impl FromJson for (a, b, c, d, e, f, g, h, i, j)
 
 # FromJson assembles user values from Json. The Leaf-as-FromJson impl is
 # the passthrough used when a leaf sits inside a Labeled in a record field.
-impl FromJson for Leaf a where {a: FromJson} needs {Fail Error} {
-  from_json_with opts j = Leaf (from_json_with opts j)
+impl FromJson for Leaf a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = Leaf (from_json j)
 }
 
 # Or tries the left branch and falls back to the right on any failure.
@@ -355,47 +342,49 @@ impl FromJson for Leaf a where {a: FromJson} needs {Fail Error} {
 # level, so the fallback walks the variant chain correctly. If both
 # branches fail, the right-branch error propagates, which is usually the
 # rightmost variant's tag-mismatch error.
-impl FromJson for Or l r where {l: FromJson, r: FromJson} needs {Fail Error} {
-  from_json_with opts j = Or_Left (from_json_with opts j) with {
-    fail _ = Or_Right (from_json_with opts j)
+impl FromJson for Or l r where {l: FromJson, r: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = Or_Left (from_json j) with {
+    fail _ = Or_Right (from_json j)
   }
 }
 
-impl FromJson for Record a where {a: FromJsonFields} needs {Fail Error} {
-  from_json_with opts j = case to_value j {
+impl FromJson for Record a where {a: FromJsonFields} needs {Fail Error, JsonOptions} {
+  from_json j = case to_value j {
     VObject vpairs -> {
       let pairs = List.map value_pair_to_json vpairs
-      Record "" (from_fields opts pairs)
+      Record "" (from_fields pairs)
     }
     other -> fail! (InvalidShape "Object" (classify other) [])
   }
 }
 
-impl FromJson for Variant (n : Symbol) a where {n: KnownSymbol, a: FromVariantPayload} needs {Fail Error} {
-  from_json_with opts j = {
+impl FromJson for Variant (n : Symbol) a where {n: KnownSymbol, a: FromVariantPayload} needs {Fail Error, JsonOptions} {
+  from_json j = {
+    let opts = get_json_options! ()
     let expected =
       apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
     case opts.tag_format {
       ExternallyTagged -> Variant (decode_external opts expected j)
       AdjacentlyTagged -> Variant (decode_adjacent opts expected j)
-      Untagged -> Variant (decode_payload opts j)
+      Untagged -> Variant (decode_payload j)
       InternallyTagged -> Variant (decode_internal opts expected j)
     }
   }
 }
 
-impl FromJson for Adt a where {a: FromJson} needs {Fail Error} {
-  from_json_with opts j = Adt "" (from_json_with opts j)
+impl FromJson for Adt a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  from_json j = Adt "" (from_json j)
 }
 
 # FromJsonFields: record-interior dispatch. Each Labeled does its own
 # symbol reflection plus rename_all and lookup. And forks the same input
 # list down both sides.
-impl FromJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJson} needs {Fail Error} {
-  from_fields opts pairs = {
+impl FromJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJson} needs {Fail Error, JsonOptions} {
+  from_fields pairs = {
+    let opts = get_json_options! ()
     let key = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
     case lookup_json key pairs {
-      Just v -> Labeled (from_json_with opts v) with {
+      Just v -> Labeled (from_json v) with {
         fail e = fail! (prefix_path key e)
       }
       Nothing -> fail! (InvalidShape $"field '{key}'" "missing" [key])
@@ -403,23 +392,23 @@ impl FromJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJso
   }
 }
 
-impl FromJsonFields for And l r where {l: FromJsonFields, r: FromJsonFields} needs {Fail Error} {
-  from_fields opts pairs = And (from_fields opts pairs) (from_fields opts pairs)
+impl FromJsonFields for And l r where {l: FromJsonFields, r: FromJsonFields} needs {Fail Error, JsonOptions} {
+  from_fields pairs = And (from_fields pairs) (from_fields pairs)
 }
 
 # FromJsonArgs: positional variant args. Leaf consumes one item from the
 # head, And chains via the returned residue.
-impl FromJsonArgs for Leaf a where {a: FromJson} needs {Fail Error} {
-  from_args opts xs = case xs {
-    h :: rest -> (Leaf (from_json_with opts h), rest)
+impl FromJsonArgs for Leaf a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  from_args xs = case xs {
+    h :: rest -> (Leaf (from_json h), rest)
     [] -> fail! (InvalidShape "variant argument" "end of array" [])
   }
 }
 
-impl FromJsonArgs for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fail Error} {
-  from_args opts xs = {
-    let (l, rest1) = from_args opts xs
-    let (r, rest2) = from_args opts rest1
+impl FromJsonArgs for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fail Error, JsonOptions} {
+  from_args xs = {
+    let (l, rest1) = from_args xs
+    let (r, rest2) = from_args rest1
     (And l r, rest2)
   }
 }
@@ -427,25 +416,25 @@ impl FromJsonArgs for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fa
 # FromVariantPayload: dispatch by Json shape. U1 from VNull, Leaf from a
 # single value, And-of-args from a VArray unfolded positionally via
 # FromJsonArgs.
-impl FromVariantPayload for U1 needs {Fail Error} {
-  decode_payload _ j = case to_value j {
+impl FromVariantPayload for U1 needs {Fail Error, JsonOptions} {
+  decode_payload j = case to_value j {
     VNull -> U1
     other -> fail! (InvalidShape "null" (classify other) [])
   }
   is_unit_payload _ = True
 }
 
-impl FromVariantPayload for Leaf a where {a: FromJson} needs {Fail Error} {
-  decode_payload opts j = Leaf (from_json_with opts j)
+impl FromVariantPayload for Leaf a where {a: FromJson} needs {Fail Error, JsonOptions} {
+  decode_payload j = Leaf (from_json j)
   is_unit_payload _ = False
 }
 
-impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fail Error} {
-  decode_payload opts j = case to_value j {
+impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} needs {Fail Error, JsonOptions} {
+  decode_payload j = case to_value j {
     VArray items -> {
       let json_items = List.map from_value items
-      let (l, rest1) = from_args opts json_items
-      let (r, _rest2) = from_args opts rest1
+      let (l, rest1) = from_args json_items
+      let (r, _rest2) = from_args rest1
       And l r
     }
     other -> fail! (InvalidShape "Array" (classify other) [])
@@ -454,6 +443,11 @@ impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} nee
 }
 
 # --- TagFormat-specific decoding helpers ---
+#
+# These take `opts` explicitly rather than re-reading the ambient handler
+# at every call. The outer `Variant` impl reads `get_json_options!` once
+# and threads the snapshot through, which avoids the cost of repeated
+# effect lookups when decoding deep variant trees.
 
 fun value_pair_to_json : (String, Value) -> (String, Json)
 value_pair_to_json (k, v) = (k, from_value v)
@@ -469,17 +463,17 @@ lookup_json k ((k2, v) :: rest) = if k == k2 then Just v else lookup_json k rest
 # string must match the expected variant name, and the payload type
 # must be U1 (otherwise decode_payload of VNull fails naturally).
 fun decode_external : Options -> String -> Json -> a
-  needs {Fail Error}
+  needs {Fail Error, JsonOptions}
   where {a: FromVariantPayload}
 decode_external opts expected j = case to_value j {
   VString s ->
     if opts.unit_variants_as_strings then {
-      if s == expected then decode_payload opts (from_value VNull)
+      if s == expected then decode_payload (from_value VNull)
       else fail! (InvalidShape $"variant '{expected}'" $"variant '{s}'" [])
     }
     else fail! (InvalidShape $"Object with variant '{expected}'" "String" [])
   VObject pairs -> case lookup_json expected (List.map value_pair_to_json pairs) {
-    Just payload -> decode_payload opts payload
+    Just payload -> decode_payload payload
     Nothing -> fail! (InvalidShape $"variant '{expected}'" "absent" [])
   }
   other ->
@@ -488,7 +482,7 @@ decode_external opts expected j = case to_value j {
 
 # AdjacentlyTagged: {<tag_field>: "VariantName", <content_field>: payload}.
 fun decode_adjacent : Options -> String -> Json -> a
-  needs {Fail Error}
+  needs {Fail Error, JsonOptions}
   where {a: FromVariantPayload}
 decode_adjacent opts expected j = case to_value j {
   VObject pairs -> {
@@ -497,7 +491,7 @@ decode_adjacent opts expected j = case to_value j {
       Just tag_j -> {
         let actual = string tag_j
         if actual == expected then case lookup_json opts.content_field kv {
-          Just content -> decode_payload opts content
+          Just content -> decode_payload content
           Nothing ->
             fail! (InvalidShape $"field '{opts.content_field}'" "missing" [
               opts.content_field,
@@ -520,7 +514,7 @@ decode_adjacent opts expected j = case to_value j {
 # rest of the object is the payload (or U1 for empty); otherwise treat
 # as ExternallyTagged.
 fun decode_internal : Options -> String -> Json -> a
-  needs {Fail Error}
+  needs {Fail Error, JsonOptions}
   where {a: FromVariantPayload}
 decode_internal opts expected j = case to_value j {
   VObject pairs -> {
@@ -534,9 +528,9 @@ decode_internal opts expected j = case to_value j {
           # remaining object as the payload. decode_payload for U1 expects
           # VNull, so synthesize one for the empty case.
           case rest {
-            [] -> decode_payload opts (from_value VNull)
+            [] -> decode_payload (from_value VNull)
             _ ->
-              decode_payload opts (from_value (VObject (List.map json_pair_to_value rest)))
+              decode_payload (from_value (VObject (List.map json_pair_to_value rest)))
           }
         }
         else fail! (InvalidShape $"variant '{expected}'" $"variant '{actual}'" [])
@@ -558,31 +552,33 @@ drop_key k ((k2, v) :: rest) =
 
 # --- Layer-3 helpers ---
 
-#@ Parse a JSON string and decode it via the FromJson trait, with default
-#@ options.
+#@ Parse a JSON string and decode it via the FromJson trait, using the
+#@ canonical defaults. Installs `json_defaults` inline, so the caller
+#@ doesn't need to set up a `JsonOptions` handler. For shared options
+#@ across many deserializations use `deserialize_with` under a
+#@ `json_opts` boundary.
 pub fun deserialize : String -> Result a Error where {a: FromJson}
-deserialize s = case J.parse_string s {
-  Ok j -> J.run from_json j
-  Err e -> Err e
-}
+deserialize s = deserialize_with s with json_defaults
 
-#@ Parse a JSON string and decode it via the FromJson trait, with the
-#@ given options.
-pub fun deserialize_with : Options -> String -> Result a Error
+#@ Parse a JSON string and decode it via the FromJson trait, reading the
+#@ active options from the ambient `JsonOptions` handler. Install one
+#@ with `json_defaults`, `json_opts`, or `json_opts_from`.
+pub fun deserialize_with : String -> Result a Error
+  needs {JsonOptions}
   where {a: FromJson}
-deserialize_with opts s = case J.parse_string s {
-  Ok j -> J.run (fun jj -> from_json_with opts jj) j
+deserialize_with s = case J.parse_string s {
+  Ok j -> J.run (fun jj -> from_json jj) j
   Err e -> Err e
 }
 
 #@ Decode-side derive-then-tweak escape hatch. Calls the Generic-derived
 #@ decoder explicitly, so a hand-written `impl FromJson` can pre-process
 #@ the input Json and route the result through the derived decoder.
-#@ Mirror of `SagaJson.Encode.derive_with`.
-pub fun derive_from_with : Options -> Json -> a
-  needs {Fail Error}
+#@ Mirror of `SagaJson.Encode.derive`.
+pub fun derive_from : Json -> a
+  needs {Fail Error, JsonOptions}
   where {a: Generic r, r: FromJson}
-derive_from_with opts j = from (from_json_with opts j)
+derive_from j = from (from_json j)
 
 #@ Decoding strategy: accept a bare JSON string as a variant tag.
 #@ Routes through the externally-tagged path with
@@ -590,22 +586,30 @@ derive_from_with opts j = from (from_json_with opts j)
 #@ `"Admin"` cleanly. Payload-bearing variants fail — there's no
 #@ payload data in a bare string to reconstruct from. Mirror of
 #@ `SagaJson.Encode.as_enum`.
-pub fun as_enum_from : Options -> Json -> a
-  needs {Fail Error}
+pub fun as_enum_from : Json -> a
+  needs {Fail Error, JsonOptions}
   where {a: FromJson}
-as_enum_from opts j =
-  from_json_with { opts | unit_variants_as_strings: True } j
+as_enum_from j = {
+  let cur = get_json_options! ()
+  from_json j with {
+    get_json_options () = resume { cur | unit_variants_as_strings: True }
+  }
+}
 
 #@ Decoding strategy: force the externally-tagged `{"Variant": payload}`
 #@ shape for unit variants too. Mirror of `SagaJson.Encode.as_tagged` —
 #@ drives the decode through `unit_variants_as_strings: False`
-#@ regardless of the caller's Options. Useful for decoding pre-default-
-#@ refinement JSON that always wraps unit variants.
-pub fun as_tagged_from : Options -> Json -> a
-  needs {Fail Error}
+#@ regardless of the ambient Options. Useful for decoding
+#@ pre-default-refinement JSON that always wraps unit variants.
+pub fun as_tagged_from : Json -> a
+  needs {Fail Error, JsonOptions}
   where {a: FromJson}
-as_tagged_from opts j =
-  from_json_with { opts | unit_variants_as_strings: False } j
+as_tagged_from j = {
+  let cur = get_json_options! ()
+  from_json j with {
+    get_json_options () = resume { cur | unit_variants_as_strings: False }
+  }
+}
 
 #@ Post-process a decoded value with an invariant check. The decoder
 #@ produces a candidate value, then the invariant function may `fail!`
@@ -616,42 +620,6 @@ as_tagged_from opts j =
 #@   nonneg_age = refine (fun u -> if u.age >= 0 then u
 #@                                  else fail! (InvalidShape "age >= 0" "negative" []))
 #@                       from_json
-pub fun refine : (a -> a needs {Fail Error}) -> (Json -> a needs {Fail Error}) -> Json -> a
-  needs {Fail Error}
+pub fun refine : (a -> a needs {Fail Error}) -> (Json -> a needs {Fail Error, ..e}) -> Json -> a
+  needs {Fail Error, ..e}
 refine invariant decoder j = invariant (decoder j)
-
-# --- Fluent decoder builder ---
-#
-# Mirror of `Encoder` on the encode side. `decoder s` wraps an input
-# String with `default_options`, the `WithOptions` setters adjust the
-# accumulated options, and `decode` collapses the builder via
-# `deserialize_with`. The target type is picked by the usual
-# `Result a Error` annotation at the call site.
-
-#@ An input JSON string paired with the Options that should drive its
-#@ decoding. Build with `decoder` or `decode_with`, refine with the
-#@ `WithOptions` setters, then collapse via `decode`.
-pub record Decoder {
-  input: String,
-  options: Options,
-}
-
-#@ Wrap an input string with `default_options`. The head of a fluent
-#@ decode chain: `input |> decoder |> rename_keys CamelCase |> decode`.
-pub fun decoder : String -> Decoder
-decoder s = Decoder { input: s, options: SagaJson.default_options }
-
-#@ Wrap an input string with a pre-built Options record. The shortcut
-#@ when you already have an Options value you want to reuse.
-pub fun decode_with : String -> Options -> Decoder
-decode_with s opts = Decoder { input: s, options: opts }
-
-impl WithOptions for Decoder {
-  map_options f d = Decoder { input: d.input, options: f d.options }
-}
-
-#@ Collapse a `Decoder` builder: parse its input and run the derived
-#@ `FromJson` decoder using the builder's accumulated Options. The
-#@ target type is picked by the result-type annotation at the call site.
-pub fun decode : Decoder -> Result a Error where {a: FromJson}
-decode d = deserialize_with d.options d.input

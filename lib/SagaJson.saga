@@ -1,5 +1,6 @@
 #@ JSON library top-level: the `Json` opaque type, the shared `Error` type,
-#@ and the decoder-running entry points.
+#@ the `Options` record and its `JsonOptions` effect, and the decoder-running
+#@ entry points.
 #@
 #@ For encoding, see `SagaJson.Encode`. For decoding primitives and
 #@ combinators, see `SagaJson.Decode`.
@@ -51,13 +52,13 @@ to_value j = case j {
   Json v -> v
 }
 
-# --- Entry points ---
-
-# --- Shared encoder/decoder options ---
+# --- Options ---
 #
 # Options live in the root module because both encode and decode consume
 # them. Uniform knobs only — anything that names a specific field belongs
-# in a hand-written impl.
+# in a hand-written impl. The `JsonOptions` effect makes them ambient:
+# `serialize_with` and `deserialize_with` read whichever options are in
+# scope at the call site, rather than threading an argument everywhere.
 
 #@ How record field names and variant names are transformed before
 #@ emission (encode) or matched against input (decode). Source
@@ -93,11 +94,12 @@ pub type TagFormat =
 
 #@ Uniform codec options. Shared between encode and decode so a single
 #@ `Options` value drives a symmetric round-trip. Construct with
-#@ record-update syntax: `{ default_options | rename_all: CamelCase }`.
-#@ Note: `omit_nothing` is encode-only (no-op on decode).
+#@ record-update syntax: `{ default_options | rename_all: CamelCase }`,
+#@ or chain the setters: `default_options |> rename_keys CamelCase`.
+#@ Note: `omit_nothings` is encode-only (no-op on decode).
 pub record Options {
   rename_all: NameStyle,
-  omit_nothing: Bool,
+  omit_nothings: Bool,
   tag_format: TagFormat,
   tag_field: String,
   content_field: String,
@@ -106,62 +108,107 @@ pub record Options {
 
 #@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
 #@ externally-tagged sums with unit variants emitted as bare strings
-#@ (matching serde, kotlinx.serialization, and most other modern JSON
-#@ libraries). Set `unit_variants_as_strings: False` to recover the
-#@ legacy `{"Admin": null}` shape (or use the `as_tagged` strategy).
+#@ (matching serde and most other modern JSON libraries). Set
+#@ `unit_variants_as_strings: False` to recover the legacy
+#@ `{"Admin": null}` shape (or use the `as_tagged` strategy).
 pub val default_options = Options {
   rename_all: AsIs,
-  omit_nothing: False,
+  omit_nothings: False,
   tag_format: ExternallyTagged,
   tag_field: "tag",
   content_field: "content",
   unit_variants_as_strings: True,
 }
 
-# --- Fluent options builder ---
+# --- JsonOptions effect ---
 #
-# The `WithOptions` trait + free-function setters give both the encode-
-# and decode-side builders (`Encoder a`, `Decoder`) a shared fluent
-# vocabulary: `value |> encoder |> rename_keys CamelCase |> ...`. Each
-# setter returns a new builder of the same type with one Options field
-# adjusted. The trait method `map_options` is the only thing
-# library-internal callers need to impl.
+# Both `serialize_with` and `deserialize_with` carry `needs {JsonOptions}`
+# and read the active Options via `get_json_options!`. Install a handler
+# at the call boundary one of three ways:
+#
+#   # canonical defaults — `json_defaults` is a named handler
+#   { ... } with json_defaults
+#
+#   # default base + transform
+#   { ... } with json_opts (rename_keys CamelCase >> omit_nothings)
+#
+#   # custom base + transform
+#   { ... } with json_opts_from production_opts (rename_keys CamelCase)
+#
+# The `serialize` / `deserialize` shortcuts in Encode/Decode install
+# `json_defaults` inline, so callers that just want defaults never have
+# to mention the effect.
 
-#@ Types that carry an `Options` value internally and let you adjust it
-#@ functionally. Implemented by `SagaJson.Encode.Encoder` and
-#@ `SagaJson.Decode.Decoder`. The free-function setters
-#@ (`rename_keys`, `tag_format`, ...) are written against this trait
-#@ so they work on both builders.
-pub trait WithOptions a {
-  fun map_options : (Options -> Options) -> a -> a
+#@ Ambient options for encode and decode. Read with `get_json_options!`
+#@ inside an `impl ToJson` / `impl FromJson` that needs to consult a knob
+#@ (rename_all, omit_nothings, tag_format, ...). Install at the call
+#@ boundary via `json_defaults`, `json_opts`, or `json_opts_from` below.
+pub effect JsonOptions {
+  fun get_json_options : Unit -> Options
 }
 
-#@ Set the `rename_all` field on the builder's Options.
-pub fun rename_keys : NameStyle -> a -> a where {a: WithOptions}
-rename_keys ns x = map_options (fun o -> { o | rename_all: ns }) x
+#@ The canonical handler: resumes every `get_json_options!` with
+#@ `default_options`. Use directly: `{ ... } with json_defaults`.
+pub handler json_defaults for JsonOptions {
+  get_json_options () = resume default_options
+}
 
-#@ Set `omit_nothing: True` on the builder's Options. Encode-only;
-#@ no-op on the decode side.
-pub fun omit_nothing : a -> a where {a: WithOptions}
-omit_nothing x = map_options (fun o -> { o | omit_nothing: True }) x
+#@ Build a handler that resumes `get_json_options!` with
+#@ `f default_options`. The common entry point for setting up an
+#@ options policy at a request boundary:
+#@
+#@   { ... } with json_opts (rename_keys CamelCase >> omit_nothings)
+pub fun json_opts : (Options -> Options) -> Handler JsonOptions
+json_opts f = handler for JsonOptions {
+  get_json_options () = resume (f default_options)
+}
 
-#@ Set the `tag_format` field on the builder's Options.
-pub fun with_tag_format : TagFormat -> a -> a where {a: WithOptions}
-with_tag_format tf x = map_options (fun o -> { o | tag_format: tf }) x
+#@ Build a handler from a custom base rather than `default_options`.
+#@ Use when you already have a named `Options` value (e.g. a
+#@ per-environment configuration) you want to build on top of:
+#@
+#@   { ... } with json_opts_from production_opts (rename_keys CamelCase)
+pub fun json_opts_from : Options -> (Options -> Options) -> Handler JsonOptions
+json_opts_from base f = handler for JsonOptions {
+  get_json_options () = resume (f base)
+}
+
+# --- Options setters ---
+#
+# All setters have shape `... -> Options -> Options` so they chain with
+# `|>` and compose with `>>`. Combine inside a `json_opts` lambda:
+#
+#   ... with json_opts (rename_keys CamelCase >> omit_nothings)
+#
+# or build an Options value directly:
+#
+#   let opts = default_options |> rename_keys CamelCase |> omit_nothings
+
+#@ Set the `rename_all` field.
+pub fun rename_keys : NameStyle -> Options -> Options
+rename_keys ns o = { o | rename_all: ns }
+
+#@ Set `omit_nothings: True`. Encode-only; no-op on the decode side
+#@ (decoders treat a missing field as an error, not as `Nothing`).
+pub fun omit_nothings : Options -> Options
+omit_nothings o = { o | omit_nothings: True }
+
+#@ Set the `tag_format` field.
+pub fun tag_format : TagFormat -> Options -> Options
+tag_format tf o = { o | tag_format: tf }
 
 #@ Set the `tag_field` name (used by AdjacentlyTagged / InternallyTagged).
-pub fun with_tag_field : String -> a -> a where {a: WithOptions}
-with_tag_field name x = map_options (fun o -> { o | tag_field: name }) x
+pub fun tag_field : String -> Options -> Options
+tag_field name o = { o | tag_field: name }
 
 #@ Set the `content_field` name (used by AdjacentlyTagged).
-pub fun with_content_field : String -> a -> a where {a: WithOptions}
-with_content_field name x = map_options (fun o -> { o | content_field: name }) x
+pub fun content_field : String -> Options -> Options
+content_field name o = { o | content_field: name }
 
 #@ Set the `unit_variants_as_strings` field. Pass False to recover the
 #@ legacy `{"Admin": null}` wrapped shape; True is the default.
-pub fun with_unit_variants_as_strings : Bool -> a -> a where {a: WithOptions}
-with_unit_variants_as_strings b x =
-  map_options (fun o -> { o | unit_variants_as_strings: b }) x
+pub fun unit_variants_as_strings : Bool -> Options -> Options
+unit_variants_as_strings b o = { o | unit_variants_as_strings: b }
 
 # --- Name-style helpers ---
 #
@@ -202,11 +249,11 @@ parse_string s = case SagaJson.Parser.parse s {
 }
 
 #@ Apply a decoder to an already-parsed Json value, returning a Result.
-pub fun run : (Json -> a needs {Fail Error}) -> Json -> Result a Error
+pub fun run : (Json -> a needs {Fail Error, ..e}) -> Json -> Result a Error needs {..e}
 run decoder j = decoder j with to_result
 
 #@ Parse a JSON string and apply a decoder in one step.
-pub fun parse : (Json -> a needs {Fail Error}) -> String -> Result a Error
+pub fun parse : (Json -> a needs {Fail Error, ..e}) -> String -> Result a Error needs {..e}
 parse decoder s = case parse_string s {
   Ok j -> run decoder j
   Err e -> Err e
