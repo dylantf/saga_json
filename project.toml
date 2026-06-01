@@ -6,4 +6,4 @@ main = "src/Main.saga"
 
 [library]
 module = "SagaJson"
-expose = ["SagaJson", "SagaJson.Encode", "SagaJson.Decode"]
+expose = ["SagaJson", "SagaJson.Encode", "SagaJson.Decode", "SagaJson.Fast", "SagaJson.Parser"]
