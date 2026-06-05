@@ -1,0 +1,126 @@
+#@ Iodata-based fast-path JSON encoding. Experimental.
+#@
+#@ Sibling to `SagaJson.Fast`. Instead of building the output as a flat
+#@ String via repeated `<>` concatenation, impls return an `Iodata`
+#@ tree — a list of binary fragments — that gets flattened once at the
+#@ boundary. Matches the shape Aeson's `Encoding` and Jason's iolist
+#@ output use.
+#@
+#@ The shim `Iodata` type lives here for now; a promoted-to-stdlib
+#@ version that matches BEAM's untagged iodata shape (so it can be
+#@ handed directly to `:gen_tcp.send` without flattening) is a future
+#@ refinement.
+module SagaJson.FastIo
+
+import Std.BitString as BS
+import Std.Int
+import Std.List
+import Std.String
+
+#@ Shim iodata: either a binary fragment or a list of fragments.
+#@ Flatten with `to_string`.
+pub type Iodata =
+  | IoStr String
+  | IoMany (List Iodata)
+
+#@ Types that can be encoded to a JSON `Iodata` tree.
+pub trait ToJsonIo a {
+  fun to_io : a -> Iodata
+}
+
+# --- Primitive impls ---
+
+impl ToJsonIo for String {
+  to_io s = IoStr (escape_string s)
+}
+
+impl ToJsonIo for Int {
+  to_io n = IoStr (show n)
+}
+
+impl ToJsonIo for Float {
+  to_io f = IoStr (show f)
+}
+
+impl ToJsonIo for Bool {
+  to_io b = IoStr (if b then "true" else "false")
+}
+
+impl ToJsonIo for Maybe a where {a: ToJsonIo} {
+  to_io m = case m {
+    Nothing -> IoStr "null"
+    Just x -> to_io x
+  }
+}
+
+impl ToJsonIo for List a where {a: ToJsonIo} {
+  to_io xs = IoMany (IoStr "[" :: intersperse_commas xs)
+}
+
+fun intersperse_commas : List a -> List Iodata where {a: ToJsonIo}
+intersperse_commas xs = case xs {
+  [] -> [IoStr "]"]
+  [x] -> [to_io x, IoStr "]"]
+  x :: rest -> to_io x :: IoStr "," :: intersperse_commas rest
+}
+
+# --- Top-level entry point ---
+
+#@ Encode a value and flatten to a compact JSON string.
+pub fun serialize : a -> String where {a: ToJsonIo}
+serialize x = to_string (to_io x)
+
+#@ Flatten an `Iodata` tree to a single String. Single tail-recursive
+#@ walk over the tree.
+pub fun to_string : Iodata -> String
+to_string io = {
+  let bs = collect io <<>>
+  case BS.to_string bs {
+    Ok s -> s
+    Err _ -> ""
+  }
+}
+
+fun collect : Iodata -> BitString -> BitString
+collect io acc = case io {
+  IoStr s -> acc <> BS.from_string s
+  IoMany xs -> collect_list xs acc
+}
+
+fun collect_list : List Iodata -> BitString -> BitString
+collect_list xs acc = case xs {
+  [] -> acc
+  h :: t -> collect_list t (collect h acc)
+}
+
+# --- String escaping (same logic as SagaJson.Fast) ---
+
+#@ Escape a Saga String as a JSON-quoted string literal.
+pub fun escape_string : String -> String
+escape_string s = {
+  let escaped = escape_loop (BS.from_string s) <<>>
+  case BS.to_string escaped {
+    Ok r -> $"\"{r}\""
+    Err _ -> $"\"{s}\""
+  }
+}
+
+fun escape_loop : BitString -> BitString -> BitString
+escape_loop bs acc = case bs {
+  <<>> -> acc
+  <<34, rest/binary>> -> escape_loop rest (acc <> <<92, 34>>)
+  <<92, rest/binary>> -> escape_loop rest (acc <> <<92, 92>>)
+  <<8, rest/binary>> -> escape_loop rest (acc <> <<92, 98>>)
+  <<9, rest/binary>> -> escape_loop rest (acc <> <<92, 116>>)
+  <<10, rest/binary>> -> escape_loop rest (acc <> <<92, 110>>)
+  <<12, rest/binary>> -> escape_loop rest (acc <> <<92, 102>>)
+  <<13, rest/binary>> -> escape_loop rest (acc <> <<92, 114>>)
+  <<c:8, rest/binary>> when c < 32 -> escape_loop rest (acc <> unicode_escape c)
+  <<c:8, rest/binary>> -> escape_loop rest (acc <> <<c>>)
+}
+
+fun unicode_escape : Int -> BitString
+unicode_escape c = {
+  let padded = String.pad_left 2 "0" (Int.to_hex c)
+  BS.from_string $"\\u00{padded}"
+}
