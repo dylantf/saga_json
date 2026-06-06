@@ -1,23 +1,38 @@
 module FromJsonTest
 
 import Std.Fail (Fail)
-import Std.Test (Testing, Test, describe, test, skip, assert_eq, assert_ok, assert_err)
+import Std.Test (
+  Testing,
+  Test,
+  describe,
+  test,
+  skip,
+  assert_eq,
+  assert_ok,
+  assert_err
+)
 import SagaJson as J (
   Options,
   NameStyle,
   TagFormat,
   default_options,
   CamelCase,
-  JsonOptions,
+  JsonOptions
 )
-import SagaJson.Encode as E (ToJson, serialize, serialize_with, as_enum, as_tagged)
 import SagaJson.Decode as D (
   FromJson,
   deserialize,
   deserialize_with,
   refine,
   as_enum_from,
-  as_tagged_from,
+  as_tagged_from
+)
+import SagaJson.Encode as E (
+  ToJson,
+  serialize,
+  serialize_with,
+  as_enum,
+  as_tagged
 )
 
 # --- Types under test ---
@@ -94,7 +109,8 @@ sample_user () = User {
 
 # Invariant for refine: age must be non-negative.
 fun nonneg_age : Person -> Person needs {Fail J.Error}
-nonneg_age p = if p.age >= 0 then p
+nonneg_age p =
+  if p.age >= 0 then p
   else fail! (J.InvalidShape "age >= 0" "negative" ["age"])
 
 pub fun tests : Unit -> Unit needs {Testing}
@@ -109,55 +125,80 @@ tests () = {
       })
 
       test "List round-trips" (fun () ->
-        assert_eq
-          (deserialize (serialize [1, 2, 3]) : Result (List Int) J.Error)
-          (Ok [1, 2, 3]))
+        assert_eq (deserialize (serialize [
+          1,
+          2,
+          3,
+        ]) : Result (List Int) J.Error) (Ok [1, 2, 3]))
 
       test "Maybe round-trips Just" (fun () ->
-        assert_eq
-          (deserialize (serialize (Just 7 : Maybe Int)) : Result (Maybe Int) J.Error)
-          (Ok (Just 7)))
+        assert_eq (deserialize (serialize (Just 7 : Maybe Int)) : Result (Maybe Int) J.Error) (Ok (Just 7)))
 
       test "Maybe round-trips Nothing" (fun () ->
-        assert_eq
-          (deserialize (serialize (Nothing : Maybe Int)) : Result (Maybe Int) J.Error)
-          (Ok Nothing))
+        assert_eq (deserialize (serialize (Nothing : Maybe Int)) : Result (Maybe Int) J.Error) (Ok Nothing))
 
       test "tuple-2 round-trips" (fun () ->
-        assert_eq
-          (deserialize (serialize (1, "hi")) : Result (Int, String) J.Error)
-          (Ok (1, "hi")))
+        assert_eq (deserialize (serialize (
+          1,
+          "hi",
+        )) : Result (Int, String) J.Error) (Ok (1, "hi")))
 
       test "tuple-3 round-trips" (fun () ->
-        assert_eq
-          (deserialize (serialize (1, 2, 3)) : Result (Int, Int, Int) J.Error)
-          (Ok (1, 2, 3)))
+        assert_eq (deserialize (serialize (
+          1,
+          2,
+          3,
+        )) : Result (Int, Int, Int) J.Error) (Ok (1, 2, 3)))
 
       test "tuple-4 round-trips mixed" (fun () ->
-        assert_eq
-          (deserialize (serialize (1, True, "x", 1.5))
-            : Result (Int, Bool, String, Float) J.Error)
-          (Ok (1, True, "x", 1.5)))
+        assert_eq (deserialize (serialize (
+          1,
+          True,
+          "x",
+          1.5,
+        )) : Result (Int, Bool, String, Float) J.Error) (Ok (
+          1,
+          True,
+          "x",
+          1.5,
+        )))
 
       test "tuple-10 round-trips" (fun () ->
-        assert_eq
-          (deserialize (serialize (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
-            : Result (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) J.Error)
-          (Ok (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+        assert_eq (deserialize (serialize (
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+        )) : Result (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) J.Error) (Ok (
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+        )))
 
       test "nested tuple round-trips" (fun () ->
-        assert_eq
-          (deserialize (serialize ((1, 2), (3, 4)))
-            : Result ((Int, Int), (Int, Int)) J.Error)
-          (Ok ((1, 2), (3, 4))))
+        assert_eq (deserialize (serialize (
+          (1, 2),
+          (3, 4),
+        )) : Result ((Int, Int), (Int, Int)) J.Error) (Ok ((1, 2), (3, 4))))
 
       test "tuple decode rejects wrong length" (fun () ->
-        assert_err
-          (deserialize "[1,2,3]" : Result (Int, Int) J.Error))
+        assert_err (deserialize "[1,2,3]" : Result (Int, Int) J.Error))
 
       test "tuple decode rejects non-array" (fun () ->
-        assert_err
-          (deserialize "{\"0\":1,\"1\":2}" : Result (Int, Int) J.Error))
+        assert_err (deserialize "{\"0\":1,\"1\":2}" : Result (Int, Int) J.Error))
 
       test "flat record (Coords)" (fun () -> {
         let c = Coords { lat: 1.0, lng: 2.0 }
@@ -166,7 +207,9 @@ tests () = {
 
       test "nested record (Address)" (fun () -> {
         let a = Address {
-          street: "s", city: "c", zip: "z",
+          street: "s",
+          city: "c",
+          zip: "z",
           coords: Coords { lat: 1.0, lng: 2.0 },
         }
         assert_eq (deserialize (serialize a) : Result Address J.Error) (Ok a)
@@ -192,13 +235,10 @@ tests () = {
       test "ADT Shape: unit variant Triangle" (fun () ->
         assert_eq (deserialize (serialize Triangle) : Result Shape J.Error) (Ok Triangle))
 
-      # Skipped: payload-bearing variant encoding hits a lowering error
-      # ("function called with 1 argument(s), but expects 3") on the main
-      # saga branch too — not a serialization-library bug.
-      skip "ADT Shape: single-arg Circle" (fun () ->
+      test "ADT Shape: single-arg Circle" (fun () ->
         assert_eq (deserialize (serialize (Circle 7)) : Result Shape J.Error) (Ok (Circle 7)))
 
-      skip "ADT Shape: multi-arg Rect" (fun () ->
+      test "ADT Shape: multi-arg Rect" (fun () ->
         assert_eq (deserialize (serialize (Rect 3 4)) : Result Shape J.Error) (Ok (Rect 3 4)))
     })
 
@@ -210,8 +250,7 @@ tests () = {
         assert_eq (deserialize "\"Viewer\"" : Result Role J.Error) (Ok Viewer))
 
       test "still accepts legacy wrapped form by default" (fun () ->
-        assert_eq
-          (deserialize "{\"Admin\":null}" : Result Role J.Error) (Ok Admin))
+        assert_eq (deserialize "{\"Admin\":null}" : Result Role J.Error) (Ok Admin))
 
       test "rejects bare string under unit_variants_as_strings: False" (fun () -> {
         let opts = { default_options | unit_variants_as_strings: False }
@@ -221,7 +260,7 @@ tests () = {
         assert_err (got : Result Role J.Error)
       })
 
-      skip "mixed ADT round-trips Triangle as bare and Circle as wrapped" (fun () -> {
+      test "mixed ADT round-trips Triangle as bare and Circle as wrapped" (fun () -> {
         assert_eq (serialize Triangle) "\"Triangle\""
         assert_eq (serialize (Circle 7)) "{\"Circle\":7}"
         assert_eq (deserialize "\"Triangle\"" : Result Shape J.Error) (Ok Triangle)
@@ -238,21 +277,24 @@ tests () = {
     describe "as_enum / as_tagged strategies" (fun () -> {
       test "as_enum_from decodes bare string" (fun () -> {
         let got =
-          J.parse (fun jj -> ((as_enum_from jj : Role) with J.json_defaults)) "\"Editor\""
+          J.parse (fun jj ->
+            (as_enum_from jj : Role) with J.json_defaults) "\"Editor\""
         assert_eq got (Ok Editor)
       })
 
       test "as_enum_from also accepts wrapped form for unit variants" (fun () -> {
         let got =
-          J.parse (fun jj -> ((as_enum_from jj : Role) with J.json_defaults)) "{\"Editor\":null}"
+          J.parse (fun jj ->
+            (as_enum_from jj : Role) with J.json_defaults) "{\"Editor\":null}"
         assert_eq got (Ok Editor)
       })
 
       test "as_enum_from applies rename_all" (fun () -> {
         let opts = { default_options | rename_all: ScreamingSnakeCase }
-        let got = J.parse (fun jj -> ((as_enum_from jj : Role) with {
-          get_json_options () = resume opts
-        })) "\"ADMIN\""
+        let got =
+          J.parse (fun jj -> (as_enum_from jj : Role) with {
+            get_json_options () = resume opts
+          }) "\"ADMIN\""
         assert_eq got (Ok Admin)
       })
 
@@ -260,7 +302,8 @@ tests () = {
         let enc = E.render (as_tagged Admin with J.json_defaults)
         assert_eq enc "{\"Admin\":null}"
         let got =
-          J.parse (fun jj -> ((as_tagged_from jj : Role) with J.json_defaults)) enc
+          J.parse (fun jj ->
+            (as_tagged_from jj : Role) with J.json_defaults) enc
         assert_eq got (Ok Admin)
       })
 
@@ -268,7 +311,7 @@ tests () = {
         let enc = E.render (as_enum Editor with J.json_defaults)
         assert_eq enc "\"Editor\""
         let got =
-          J.parse (fun jj -> ((as_enum_from jj : Role) with J.json_defaults)) enc
+          J.parse (fun jj -> (as_enum_from jj : Role) with J.json_defaults) enc
         assert_eq got (Ok Editor)
       })
     })
@@ -277,7 +320,9 @@ tests () = {
       test "rename_all: CamelCase round-trips through nested record" (fun () -> {
         let u = sample_user ()
         let opts = { default_options | rename_all: CamelCase }
-        let encoded = serialize_with u with { get_json_options () = resume opts }
+        let encoded = serialize_with u with {
+          get_json_options () = resume opts
+        }
         let decoded = deserialize_with encoded with {
           get_json_options () = resume opts
         }
@@ -292,18 +337,17 @@ tests () = {
         assert_err (deserialize "{\"NotAVariant\":null}" : Result Role J.Error))
 
       test "missing field on Person surfaces Fail Error" (fun () -> {
-        let r = deserialize "{\"name\":\"Alice\"}" : Result Person J.Error
+        let r = (deserialize "{\"name\":\"Alice\"}" : Result Person J.Error)
         case r {
           Err (J.InvalidShape exp _ _) ->
-            # error message names the missing field
             assert! True $"got expected error: {exp}"
-          other -> assert! False $"expected missing-field error, got {debug other}"
+          other ->
+            assert! False $"expected missing-field error, got {debug other}"
         }
       })
 
       test "wrong-typed field on Person surfaces Fail Error" (fun () ->
-        assert_err
-          (deserialize "{\"name\":\"Alice\",\"age\":\"thirty\"}" : Result Person J.Error))
+        assert_err (deserialize "{\"name\":\"Alice\",\"age\":\"thirty\"}" : Result Person J.Error))
     })
 
     # describe "fluent Decoder builder" (fun () -> {
@@ -331,13 +375,15 @@ tests () = {
 
     describe "refine" (fun () -> {
       test "accepts value matching invariant" (fun () -> {
-        let dec = refine nonneg_age (fun jj -> (from_json jj with J.json_defaults))
+        let dec =
+          refine nonneg_age (fun jj -> from_json jj with J.json_defaults)
         let got = J.parse dec "{\"name\":\"Ada\",\"age\":30}"
         assert_eq got (Ok (Person { name: "Ada", age: 30 }))
       })
 
       test "rejects value violating invariant" (fun () -> {
-        let dec = refine nonneg_age (fun jj -> (from_json jj with J.json_defaults))
+        let dec =
+          refine nonneg_age (fun jj -> from_json jj with J.json_defaults)
         let got = J.parse dec "{\"name\":\"Ada\",\"age\":-1}"
         case got {
           Err (J.InvalidShape "age >= 0" "negative" _) -> assert! True ""

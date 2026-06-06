@@ -8,6 +8,7 @@ module SagaJson.Encode
 import Std.Base (Show, Debug)
 import Std.BitString as BS
 import Std.Fail (Fail)
+import Std.Generic (Generic, U1, Leaf, Labeled, And, Or, Variant, Record, Adt)
 import Std.Int
 import Std.List
 import Std.String

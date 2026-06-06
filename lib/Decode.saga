@@ -7,6 +7,7 @@ module SagaJson.Decode
 
 import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
 import Std.Fail (Fail)
+import Std.Generic (Generic, U1, Leaf, Labeled, And, Or, Variant, Record, Adt)
 import Std.Int
 import Std.List
 import SagaJson (
@@ -221,104 +222,108 @@ impl FromJson for (a, b) where {a: FromJson, b: FromJson} needs {Fail Error, Jso
   }
 }
 
-impl FromJson for (a, b, c)
-  where {a: FromJson, b: FromJson, c: FromJson} needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c) where {a: FromJson, b: FromJson, c: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 3 j {
     [j1, j2, j3] -> (from_json j1, from_json j2, from_json j3)
     _ -> fail! (InvalidShape "Array of 3" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d)
-  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson}
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 4 j {
     [j1, j2, j3, j4] -> (from_json j1, from_json j2, from_json j3, from_json j4)
     _ -> fail! (InvalidShape "Array of 4" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e)
-  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson}
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 5 j {
     [j1, j2, j3, j4, j5] -> (
-      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
     )
     _ -> fail! (InvalidShape "Array of 5" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e, f)
-  where {
-    a: FromJson, b: FromJson, c: FromJson,
-    d: FromJson, e: FromJson, f: FromJson,
-  }
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e, f) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson, f: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 6 j {
     [j1, j2, j3, j4, j5, j6] -> (
-      from_json j1, from_json j2, from_json j3,
-      from_json j4, from_json j5, from_json j6,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
+      from_json j6,
     )
     _ -> fail! (InvalidShape "Array of 6" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e, f, g)
-  where {
-    a: FromJson, b: FromJson, c: FromJson, d: FromJson,
-    e: FromJson, f: FromJson, g: FromJson,
-  }
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e, f, g) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson, f: FromJson, g: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 7 j {
     [j1, j2, j3, j4, j5, j6, j7] -> (
-      from_json j1, from_json j2, from_json j3, from_json j4,
-      from_json j5, from_json j6, from_json j7,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
+      from_json j6,
+      from_json j7,
     )
     _ -> fail! (InvalidShape "Array of 7" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e, f, g, h)
-  where {
-    a: FromJson, b: FromJson, c: FromJson, d: FromJson,
-    e: FromJson, f: FromJson, g: FromJson, h: FromJson,
-  }
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e, f, g, h) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson, f: FromJson, g: FromJson, h: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 8 j {
     [j1, j2, j3, j4, j5, j6, j7, j8] -> (
-      from_json j1, from_json j2, from_json j3, from_json j4,
-      from_json j5, from_json j6, from_json j7, from_json j8,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
+      from_json j6,
+      from_json j7,
+      from_json j8,
     )
     _ -> fail! (InvalidShape "Array of 8" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e, f, g, h, i)
-  where {
-    a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
-    f: FromJson, g: FromJson, h: FromJson, i: FromJson,
-  }
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e, f, g, h, i) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson, f: FromJson, g: FromJson, h: FromJson, i: FromJson} needs {Fail Error, JsonOptions} {
   from_json j = case tuple_items 9 j {
     [j1, j2, j3, j4, j5, j6, j7, j8, j9] -> (
-      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
-      from_json j6, from_json j7, from_json j8, from_json j9,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
+      from_json j6,
+      from_json j7,
+      from_json j8,
+      from_json j9,
     )
     _ -> fail! (InvalidShape "Array of 9" "wrong length" [])
   }
 }
 
-impl FromJson for (a, b, c, d, e, f, g, h, i, j)
-  where {
-    a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
-    f: FromJson, g: FromJson, h: FromJson, i: FromJson, j: FromJson,
-  }
-  needs {Fail Error, JsonOptions} {
+impl FromJson for (a, b, c, d, e, f, g, h, i, j) where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson, f: FromJson, g: FromJson, h: FromJson, i: FromJson, j: FromJson} needs {Fail Error, JsonOptions} {
   from_json json = case tuple_items 10 json {
     [j1, j2, j3, j4, j5, j6, j7, j8, j9, j10] -> (
-      from_json j1, from_json j2, from_json j3, from_json j4, from_json j5,
-      from_json j6, from_json j7, from_json j8, from_json j9, from_json j10,
+      from_json j1,
+      from_json j2,
+      from_json j3,
+      from_json j4,
+      from_json j5,
+      from_json j6,
+      from_json j7,
+      from_json j8,
+      from_json j9,
+      from_json j10,
     )
     _ -> fail! (InvalidShape "Array of 10" "wrong length" [])
   }

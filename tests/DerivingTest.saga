@@ -109,16 +109,13 @@ tests () = {
       test "unit variant -> bare string" (fun () ->
         assert_eq (serialize Triangle) "\"Triangle\"")
 
-      # Skipped: payload-bearing variant encoding hits a lowering error
-      # ("function called with 1 argument(s), but expects 3") on the main
-      # saga branch too — not a serialization-library bug.
-      skip "single-arg variant unwraps payload" (fun () ->
+      test "single-arg variant unwraps payload" (fun () ->
         assert_eq (serialize (Circle 7)) "{\"Circle\":7}")
 
-      skip "multi-arg variant uses array payload" (fun () ->
+      test "multi-arg variant uses array payload" (fun () ->
         assert_eq (serialize (Rect 3 4)) "{\"Rect\":[3,4]}")
 
-      skip "recursive type round-trips through the trait dict" (fun () ->
+      test "recursive type round-trips through the trait dict" (fun () ->
         assert_eq (serialize (ICons 1 (ICons 2 (ICons 3 INil)))) "{\"ICons\":[1,{\"ICons\":[2,{\"ICons\":[3,\"INil\"]}]}]}")
     })
 
@@ -135,7 +132,7 @@ tests () = {
           },
         }
         let got = serialize_with nested with {
-          get_json_options () = resume (with_rename_all CamelCase)
+          get_json_options () = resume with_rename_all CamelCase
         }
         let want =
           "{\"primaryUser\":{\"userInfo\":{\"firstName\":\"Ada\",\"lastName\":\"Lovelace\"},\"accountId\":7}}"
@@ -146,7 +143,9 @@ tests () = {
         let got = serialize_with (MiddleR {
           user_info: InnerR { first_name: "Ada", last_name: "Lovelace" },
           account_id: 7,
-        }) with { get_json_options () = resume (with_rename_all KebabCase) }
+        }) with {
+          get_json_options () = resume with_rename_all KebabCase
+        }
         assert_eq got "{\"user-info\":{\"first-name\":\"Ada\",\"last-name\":\"Lovelace\"},\"account-id\":7}"
       })
 
@@ -154,7 +153,9 @@ tests () = {
         let got = serialize_with (InnerR {
           first_name: "Ada",
           last_name: "L",
-        }) with { get_json_options () = resume (with_rename_all ScreamingSnakeCase) }
+        }) with {
+          get_json_options () = resume with_rename_all ScreamingSnakeCase
+        }
         assert_eq got "{\"FIRST_NAME\":\"Ada\",\"LAST_NAME\":\"L\"}"
       })
     })
@@ -170,7 +171,9 @@ tests () = {
         let got = serialize_with (Settings {
           name: "x",
           nickname: Nothing,
-        }) with { get_json_options () = resume (with_omit_nothing True) }
+        }) with {
+          get_json_options () = resume with_omit_nothing True
+        }
         assert_eq got "{\"name\":\"x\"}"
       })
 
@@ -178,7 +181,9 @@ tests () = {
         let got = serialize_with (Settings {
           name: "x",
           nickname: Just "xx",
-        }) with { get_json_options () = resume (with_omit_nothing True) }
+        }) with {
+          get_json_options () = resume with_omit_nothing True
+        }
         assert_eq got "{\"name\":\"x\",\"nickname\":\"xx\"}"
       })
     })
@@ -186,23 +191,22 @@ tests () = {
     describe "tag_format: AdjacentlyTagged" (fun () -> {
       test "unit variant emits both tag and (null) content" (fun () -> {
         let got = serialize_with NoOp with {
-          get_json_options () = resume (with_tag_format AdjacentlyTagged)
+          get_json_options () = resume with_tag_format AdjacentlyTagged
         }
         assert_eq got "{\"tag\":\"NoOp\",\"content\":null}"
       })
 
       test "primitive payload sits under content_field" (fun () -> {
         let got = serialize_with (Bare 9) with {
-          get_json_options () = resume (with_tag_format AdjacentlyTagged)
+          get_json_options () = resume with_tag_format AdjacentlyTagged
         }
         assert_eq got "{\"tag\":\"Bare\",\"content\":9}"
       })
 
       test "record payload sits under content_field" (fun () -> {
-        let got = serialize_with (WrapIt (Payload {
-          x: 1,
-          y: 2,
-        })) with { get_json_options () = resume (with_tag_format AdjacentlyTagged) }
+        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
+          get_json_options () = resume with_tag_format AdjacentlyTagged
+        }
         assert_eq got "{\"tag\":\"WrapIt\",\"content\":{\"x\":1,\"y\":2}}"
       })
 
@@ -223,22 +227,21 @@ tests () = {
     describe "tag_format: InternallyTagged" (fun () -> {
       test "unit variant emits just the tag" (fun () -> {
         let got = serialize_with NoOp with {
-          get_json_options () = resume (with_tag_format InternallyTagged)
+          get_json_options () = resume with_tag_format InternallyTagged
         }
         assert_eq got "{\"tag\":\"NoOp\"}"
       })
 
       test "object payload merges tag in front" (fun () -> {
-        let got = serialize_with (WrapIt (Payload {
-          x: 1,
-          y: 2,
-        })) with { get_json_options () = resume (with_tag_format InternallyTagged) }
+        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
+          get_json_options () = resume with_tag_format InternallyTagged
+        }
         assert_eq got "{\"tag\":\"WrapIt\",\"x\":1,\"y\":2}"
       })
 
       test "primitive payload falls back to externally-tagged" (fun () -> {
         let got = serialize_with (Bare 9) with {
-          get_json_options () = resume (with_tag_format InternallyTagged)
+          get_json_options () = resume with_tag_format InternallyTagged
         }
         assert_eq got "{\"Bare\":9}"
       })
@@ -256,29 +259,28 @@ tests () = {
     describe "tag_format: Untagged" (fun () -> {
       test "unit variant emits null" (fun () -> {
         let got = serialize_with NoOp with {
-          get_json_options () = resume (with_tag_format Untagged)
+          get_json_options () = resume with_tag_format Untagged
         }
         assert_eq got "null"
       })
 
       test "primitive variant emits the bare value" (fun () -> {
         let got = serialize_with (Bare 9) with {
-          get_json_options () = resume (with_tag_format Untagged)
+          get_json_options () = resume with_tag_format Untagged
         }
         assert_eq got "9"
       })
 
       test "record-payload variant emits the bare object" (fun () -> {
-        let got = serialize_with (WrapIt (Payload {
-          x: 1,
-          y: 2,
-        })) with { get_json_options () = resume (with_tag_format Untagged) }
+        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
+          get_json_options () = resume with_tag_format Untagged
+        }
         assert_eq got "{\"x\":1,\"y\":2}"
       })
 
       test "multi-arg variant emits the bare array" (fun () -> {
         let got = serialize_with (Rect 3 4) with {
-          get_json_options () = resume (with_tag_format Untagged)
+          get_json_options () = resume with_tag_format Untagged
         }
         assert_eq got "[3,4]"
       })
@@ -288,10 +290,10 @@ tests () = {
       test "Triangle emits bare string under defaults" (fun () ->
         assert_eq (serialize Triangle) "\"Triangle\"")
 
-      skip "Circle (single-arg) still wraps" (fun () ->
+      test "Circle (single-arg) still wraps" (fun () ->
         assert_eq (serialize (Circle 7)) "{\"Circle\":7}")
 
-      skip "Rect (multi-arg) still wraps as array" (fun () ->
+      test "Rect (multi-arg) still wraps as array" (fun () ->
         assert_eq (serialize (Rect 3 4)) "{\"Rect\":[3,4]}")
 
       test "unit_variants_as_strings: False recovers legacy shape" (fun () -> {
@@ -315,28 +317,29 @@ tests () = {
       test "as_enum emits bare string for unit variant" (fun () ->
         assert_eq (E.render (as_enum NoOp with J.json_defaults)) "\"NoOp\"")
 
-      skip "as_enum drops payload on single-arg variant" (fun () ->
+      test "as_enum drops payload on single-arg variant" (fun () ->
         assert_eq (E.render (as_enum (Bare 9) with J.json_defaults)) "\"Bare\"")
 
-      skip "as_enum drops record payload on single-arg variant" (fun () ->
-        assert_eq (E.render (as_enum (WrapIt (Payload {
-          x: 1,
-          y: 2,
-        })) with J.json_defaults)) "\"WrapIt\"")
+      test "as_enum drops record payload on single-arg variant" (fun () ->
+        assert_eq (E.render (as_enum (WrapIt (Payload { x: 1, y: 2 }))
+          with J.json_defaults)) "\"WrapIt\"")
 
       test "as_enum honors rename_all (already-bare unit variant)" (fun () -> {
         let opts = { default_options | rename_all: ScreamingSnakeCase }
-        let got = E.render (as_enum NoOp with {
-          get_json_options () = resume opts
-        })
+        let got =
+          E.render (as_enum NoOp with {
+            get_json_options () = resume opts
+          })
         assert_eq got "\"NOOP\""
       })
 
       test "as_tagged emits wrapped form on unit variant" (fun () ->
-        assert_eq (E.render (as_tagged NoOp with J.json_defaults)) "{\"NoOp\":null}")
+        assert_eq (E.render (as_tagged NoOp
+          with J.json_defaults)) "{\"NoOp\":null}")
 
       test "as_tagged leaves payload-bearing variants alone" (fun () ->
-        assert_eq (E.render (as_tagged (Bare 9) with J.json_defaults)) "{\"Bare\":9}")
+        assert_eq (E.render (as_tagged (Bare 9)
+          with J.json_defaults)) "{\"Bare\":9}")
     })
 
     describe "byte-for-byte match with hand-written" (fun () -> {
