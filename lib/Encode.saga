@@ -45,7 +45,8 @@ pub fun bool : Bool -> Json
 bool b = from_value (VBool b)
 
 #@ The JSON `null` value.
-pub val null = from_value VNull
+pub fun null : Json
+null = from_value VNull
 
 #@ Encode a list of `Json` values as a JSON array.
 pub fun array : List Json -> Json
@@ -213,77 +214,89 @@ impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} 
   }
 }
 
-impl ToJson for (a, b, c, d, e)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson}
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5) = t
     array [to_json x1, to_json x2, to_json x3, to_json x4, to_json x5]
   }
 }
 
-impl ToJson for (a, b, c, d, e, f)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson}
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e, f) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5, x6) = t
-    array [to_json x1, to_json x2, to_json x3, to_json x4, to_json x5, to_json x6]
+    array [
+      to_json x1,
+      to_json x2,
+      to_json x3,
+      to_json x4,
+      to_json x5,
+      to_json x6,
+    ]
   }
 }
 
-impl ToJson for (a, b, c, d, e, f, g)
-  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson}
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e, f, g) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7) = t
     array [
-      to_json x1, to_json x2, to_json x3, to_json x4,
-      to_json x5, to_json x6, to_json x7,
+      to_json x1,
+      to_json x2,
+      to_json x3,
+      to_json x4,
+      to_json x5,
+      to_json x6,
+      to_json x7,
     ]
   }
 }
 
-impl ToJson for (a, b, c, d, e, f, g, h)
-  where {
-    a: ToJson, b: ToJson, c: ToJson, d: ToJson,
-    e: ToJson, f: ToJson, g: ToJson, h: ToJson,
-  }
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e, f, g, h) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson, h: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8) = t
     array [
-      to_json x1, to_json x2, to_json x3, to_json x4,
-      to_json x5, to_json x6, to_json x7, to_json x8,
+      to_json x1,
+      to_json x2,
+      to_json x3,
+      to_json x4,
+      to_json x5,
+      to_json x6,
+      to_json x7,
+      to_json x8,
     ]
   }
 }
 
-impl ToJson for (a, b, c, d, e, f, g, h, i)
-  where {
-    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
-    f: ToJson, g: ToJson, h: ToJson, i: ToJson,
-  }
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e, f, g, h, i) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson, h: ToJson, i: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
     array [
-      to_json x1, to_json x2, to_json x3, to_json x4, to_json x5,
-      to_json x6, to_json x7, to_json x8, to_json x9,
+      to_json x1,
+      to_json x2,
+      to_json x3,
+      to_json x4,
+      to_json x5,
+      to_json x6,
+      to_json x7,
+      to_json x8,
+      to_json x9,
     ]
   }
 }
 
-impl ToJson for (a, b, c, d, e, f, g, h, i, j)
-  where {
-    a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson,
-    f: ToJson, g: ToJson, h: ToJson, i: ToJson, j: ToJson,
-  }
-  needs {JsonOptions} {
+impl ToJson for (a, b, c, d, e, f, g, h, i, j) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson, g: ToJson, h: ToJson, i: ToJson, j: ToJson} needs {JsonOptions} {
   to_json t = {
     let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
     array [
-      to_json x1, to_json x2, to_json x3, to_json x4, to_json x5,
-      to_json x6, to_json x7, to_json x8, to_json x9, to_json x10,
+      to_json x1,
+      to_json x2,
+      to_json x3,
+      to_json x4,
+      to_json x5,
+      to_json x6,
+      to_json x7,
+      to_json x8,
+      to_json x9,
+      to_json x10,
     ]
   }
 }
@@ -323,8 +336,8 @@ impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload}
     let p = payload_json payload
     case opts.tag_format {
       ExternallyTagged ->
-        if opts.unit_variants_as_strings && is_unit_payload payload
-        then string name
+        if opts.unit_variants_as_strings
+          && is_unit_payload payload then string name
         else object [(name, p)]
       AdjacentlyTagged ->
         object [(opts.tag_field, string name), (opts.content_field, p)]

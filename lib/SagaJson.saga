@@ -15,7 +15,7 @@ import SagaJson.Parser (Value)
 #@ A JSON value. Opaque so the internal representation can evolve.
 #@ Construct with `SagaJson.Encode` primitives; inspect with
 #@ `SagaJson.Decode` combinators.
-pub opaque type Json = Json Value
+opaque type Json = Json Value
 
 impl Debug for Json {
   debug j = case j {
@@ -111,7 +111,8 @@ pub record Options {
 #@ (matching serde and most other modern JSON libraries). Set
 #@ `unit_variants_as_strings: False` to recover the legacy
 #@ `{"Admin": null}` shape (or use the `as_tagged` strategy).
-pub val default_options = Options {
+pub fun default_options : Options
+default_options = Options {
   rename_all: AsIs,
   omit_nothings: False,
   tag_format: ExternallyTagged,
@@ -160,7 +161,7 @@ pub handler json_defaults for JsonOptions {
 #@   { ... } with json_opts (rename_keys CamelCase >> omit_nothings)
 pub fun json_opts : (Options -> Options) -> Handler JsonOptions
 json_opts f = handler for JsonOptions {
-  get_json_options () = resume (f default_options)
+  get_json_options () = resume f default_options
 }
 
 #@ Build a handler from a custom base rather than `default_options`.
@@ -170,7 +171,7 @@ json_opts f = handler for JsonOptions {
 #@   { ... } with json_opts_from production_opts (rename_keys CamelCase)
 pub fun json_opts_from : Options -> (Options -> Options) -> Handler JsonOptions
 json_opts_from base f = handler for JsonOptions {
-  get_json_options () = resume (f base)
+  get_json_options () = resume f base
 }
 
 # --- Options setters ---
@@ -249,11 +250,13 @@ parse_string s = case SagaJson.Parser.parse s {
 }
 
 #@ Apply a decoder to an already-parsed Json value, returning a Result.
-pub fun run : (Json -> a needs {Fail Error, ..e}) -> Json -> Result a Error needs {..e}
+pub fun run : (Json -> a needs {Fail Error, ..e}) -> Json -> Result a Error
+  needs {..e}
 run decoder j = decoder j with to_result
 
 #@ Parse a JSON string and apply a decoder in one step.
-pub fun parse : (Json -> a needs {Fail Error, ..e}) -> String -> Result a Error needs {..e}
+pub fun parse : (Json -> a needs {Fail Error, ..e}) -> String -> Result a Error
+  needs {..e}
 parse decoder s = case parse_string s {
   Ok j -> run decoder j
   Err e -> Err e

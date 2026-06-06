@@ -15,7 +15,7 @@ import SagaJson as J (
   tag_field,
   content_field,
   CamelCase,
-  AdjacentlyTagged,
+  AdjacentlyTagged
 )
 import SagaJson.Encode as E (ToJson, serialize_with, as_enum, as_tagged, render)
 
@@ -56,11 +56,8 @@ run () = {
 
   # tag_format: adjacently-tagged ADT variants. Setters compose with
   # `>>` so a multi-knob policy fits on one line.
-  let adjacent = json_opts (
-    tag_format AdjacentlyTagged
-    >> tag_field "tag"
-    >> content_field "value"
-  )
+  let adjacent =
+    json_opts (tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value")
   {
     dbg (serialize_with Active)
   } with adjacent
