@@ -74,28 +74,28 @@ run () = {
   let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
   {
     dbg (serialize_with (User { first_name: "Grace", last_name: "Hopper" }))
-    # dbg (serialize_with (Notification { message: "ok", details: Nothing }))
-    # dbg (serialize_with Active)
+    dbg (serialize_with (Notification { message: "ok", details: Nothing }))
+    dbg (serialize_with Active)
   } with api_shape
 
   let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
   {
     dbg (serialize_with (User { first_name: "Grace", last_name: "Hopper" }))
-    # dbg (serialize_with (Notification { message: "ok", details: Nothing }))
-    # dbg (serialize_with Active)
+    dbg (serialize_with (Notification { message: "ok", details: Nothing }))
+    dbg (serialize_with Active)
   } with api_shape
 
   # as_enum: drop any payload, emit only the variant tag as a bare
   # string. Lossy by design.
   {
     dbg (render (as_enum Heartbeat))
-    # dbg (render (as_enum (Login 42)))
+    dbg (render (as_enum (Login 42)))
   } with J.json_defaults
 
   # as_tagged: force the externally-tagged `{"V": payload}` shape
   # uniformly, including for unit variants.
   {
     dbg (render (as_tagged Heartbeat))
-    # dbg (render (as_tagged (Login 42)))
+    dbg (render (as_tagged (Login 42)))
   } with J.json_defaults
 }

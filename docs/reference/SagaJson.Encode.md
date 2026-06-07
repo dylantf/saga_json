@@ -43,7 +43,7 @@ trait default), or write `deriving (ToJson)`.
 ### null
 
 ```saga
-val null
+fun null : Json
 ```
 
 The JSON `null` value.
@@ -239,4 +239,3 @@ fun encode_with : a -> Options -> Encoder a where {a: ToJson}
 
 Wrap a value with a pre-built Options record. The shortcut when
 you already have an Options value you want to reuse.
-

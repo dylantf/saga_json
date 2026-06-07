@@ -60,16 +60,16 @@ type TagFormat =
 How sum-type variants are tagged in JSON.
 
 - `ExternallyTagged` (default): `{"Variant": payload}` for variants
-that carry a payload; unit variants emit as bare strings
-(`"Admin"`) when `unit_variants_as_strings` is True (the default).
+  that carry a payload; unit variants emit as bare strings
+  (`"Admin"`) when `unit_variants_as_strings` is True (the default).
 - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
-both fields always emitted, including for unit (U1) variants where
-`content_field` carries `null`.
+  both fields always emitted, including for unit (U1) variants where
+  `content_field` carries `null`.
 - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
-Only well-defined when the payload renders to a JSON object (single
-record-valued variants) or `null` (unit variants). For primitive /
-array payloads the encoder falls back to `ExternallyTagged` — same
-restriction as serde.
+  Only well-defined when the payload renders to a JSON object (single
+  record-valued variants) or `null` (unit variants). For primitive /
+  array payloads the encoder falls back to `ExternallyTagged` — same
+  restriction as serde.
 - `Untagged`: emit the payload directly; variant identity is lost.
 
 ### Options
@@ -111,7 +111,7 @@ so they work on both builders.
 ### default_options
 
 ```saga
-val default_options
+fun default_options : Options
 ```
 
 The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
@@ -222,4 +222,3 @@ fun parse : Json -> a needs {Fail Error} -> String -> Result a Error
 ```
 
 Parse a JSON string and apply a decoder in one step.
-
