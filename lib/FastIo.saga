@@ -1,15 +1,16 @@
 #@ Iodata-based fast-path JSON encoding. Experimental.
 #@
-#@ Sibling to `SagaJson.Fast`. Instead of building the output as a flat
-#@ String via repeated `<>` concatenation, impls return an `Iodata`
-#@ tree — a list of binary fragments — that gets flattened once at the
-#@ boundary. Matches the shape Aeson's `Encoding` and Jason's iolist
-#@ output use.
+#@ Sibling to `SagaJson.Fast`. Instead of building the output by repeated
+#@ `<>` concatenation (which copies the accumulator on every step), impls
+#@ return an `Iodata` tree of binary fragments. The tree is walked once
+#@ into a flat `List BitString` and flattened by `BS.concat`
+#@ (`iolist_to_binary`) in a single pass with the total size known up
+#@ front. Matches the shape Aeson's `Encoding` and Jason's iolist output
+#@ use.
 #@
-#@ The shim `Iodata` type lives here for now; a promoted-to-stdlib
-#@ version that matches BEAM's untagged iodata shape (so it can be
-#@ handed directly to `:gen_tcp.send` without flattening) is a future
-#@ refinement.
+#@ String escaping is scan-and-slice: clean runs are emitted as zero-copy
+#@ sub-binaries via `BS.slice`, and a string with nothing to escape is
+#@ passed through untouched. Only escape sequences allocate.
 module SagaJson.FastIo
 
 import Std.BitString as BS
@@ -17,10 +18,16 @@ import Std.Int
 import Std.List
 import Std.String
 
-#@ Shim iodata: either a binary fragment or a list of fragments.
-#@ Flatten with `to_string`.
+#@ Shim iodata: a leaf fragment or a list of fragments. Leaves come in
+#@ two flavors — `IoStr` for ordinary String fragments (the ergonomic
+#@ case for hand-written / derived impls; zero-cost since Saga strings
+#@ are already UTF-8 binaries) and `IoBytes` for raw `BitString`
+#@ fragments (used by the escaper to emit zero-copy slices). Built
+#@ compositionally (each `IoMany` conses children in O(1)); flatten with
+#@ `to_string`.
 pub type Iodata =
   | IoStr String
+  | IoBytes BitString
   | IoMany (List Iodata)
 
 #@ Types that can be encoded to a JSON `Iodata` tree.
@@ -31,7 +38,7 @@ pub trait ToJsonIo a {
 # --- Primitive impls ---
 
 impl ToJsonIo for String {
-  to_io s = IoStr (escape_string s)
+  to_io s = escape_io s
 }
 
 impl ToJsonIo for Int {
@@ -70,54 +77,105 @@ intersperse_commas xs = case xs {
 pub fun serialize : a -> String where {a: ToJsonIo}
 serialize x = to_string (to_io x)
 
-#@ Flatten an `Iodata` tree to a single String. Single tail-recursive
-#@ walk over the tree.
+#@ Flatten an `Iodata` tree to a compact JSON String. Walks the tree once
+#@ into a flat fragment list, then concatenates in one pass via `BS.concat`.
+#@ The result is valid UTF-8 by construction — every fragment is either a
+#@ slice of a (valid UTF-8) source string, taken on an ASCII boundary, or
+#@ an ASCII escape sequence — so the validating `BS.to_string` pass is
+#@ skipped in favor of the zero-cost `BS.to_string_unchecked`.
 pub fun to_string : Iodata -> String
-to_string io = {
-  let bs = collect io <<>>
-  case BS.to_string bs {
-    Ok s -> s
-    Err _ -> ""
-  }
-}
+to_string io = BS.to_string_unchecked (BS.concat (List.reverse (collect io [])))
 
-fun collect : Iodata -> BitString -> BitString
+# Walk the tree prepending each leaf onto the accumulator. The result is
+# in reverse order (cheap O(1) cons); `to_string` reverses once at the end.
+fun collect : Iodata -> List BitString -> List BitString
 collect io acc = case io {
-  IoStr s -> acc <> BS.from_string s
+  IoStr s -> BS.from_string s :: acc
+  IoBytes b -> b :: acc
   IoMany xs -> collect_list xs acc
 }
 
-fun collect_list : List Iodata -> BitString -> BitString
+fun collect_list : List Iodata -> List BitString -> List BitString
 collect_list xs acc = case xs {
   [] -> acc
   h :: t -> collect_list t (collect h acc)
 }
 
-# --- String escaping (same logic as SagaJson.Fast) ---
+# --- String escaping (scan-and-slice via binary pattern matching) ---
 
-#@ Escape a Saga String as a JSON-quoted string literal.
+#@ Escape a Saga String as a JSON-quoted string `Iodata` tree. The bytes
+#@ are walked with a binary match context (no per-byte indexing); clean
+#@ runs are emitted as zero-copy sub-binary slices and only escapes
+#@ allocate. A string with no special bytes yields a single slice over
+#@ the original.
+pub fun escape_io : String -> Iodata
+escape_io s = {
+  let bs = BS.from_string s
+  let frags = scan bs 0 0 bs []
+  IoMany (IoStr "\"" :: with_close_quote frags)
+}
+
+# Reverse the (prepend-order) fragment list back into document order while
+# appending the closing quote — one pass, no separate reverse.
+fun with_close_quote : List BitString -> List Iodata
+with_close_quote frags = revcat frags [IoStr "\""]
+
+fun revcat : List BitString -> List Iodata -> List Iodata
+revcat xs acc = case xs {
+  [] -> acc
+  x :: rest -> revcat rest (IoBytes x :: acc)
+}
+
+#@ Escape a Saga String as a JSON-quoted string literal (flattened).
+#@ Kept for parity with `SagaJson.Fast.escape_string`.
 pub fun escape_string : String -> String
-escape_string s = {
-  let escaped = escape_loop (BS.from_string s) <<>>
-  case BS.to_string escaped {
-    Ok r -> $"\"{r}\""
-    Err _ -> $"\"{s}\""
-  }
+escape_string s = to_string (escape_io s)
+
+# Walk `rem` with a binary match context, tracking the byte offset `skip`
+# of the current clean run and its length `len`. On a special byte, flush
+# the clean run as one zero-copy slice of `orig` and push the escape; on a
+# clean byte just extend `len`. Fragments accumulate in reverse order.
+fun scan : BitString -> Int -> Int -> BitString -> List BitString -> List BitString
+scan orig skip len rem acc = case rem {
+  <<>> -> flush orig skip len acc
+  <<34, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_quote :: flush orig skip len acc)
+  <<92, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_bs :: flush orig skip len acc)
+  <<8, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_b :: flush orig skip len acc)
+  <<9, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_t :: flush orig skip len acc)
+  <<10, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_n :: flush orig skip len acc)
+  <<12, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_f :: flush orig skip len acc)
+  <<13, rest/binary>> -> scan orig (skip + len + 1) 0 rest (esc_r :: flush orig skip len acc)
+  <<c:8, rest/binary>> when c < 32 ->
+    scan orig (skip + len + 1) 0 rest (unicode_escape c :: flush orig skip len acc)
+  <<_c:8, rest/binary>> -> scan orig skip (len + 1) rest acc
 }
 
-fun escape_loop : BitString -> BitString -> BitString
-escape_loop bs acc = case bs {
-  <<>> -> acc
-  <<34, rest/binary>> -> escape_loop rest (acc <> <<92, 34>>)
-  <<92, rest/binary>> -> escape_loop rest (acc <> <<92, 92>>)
-  <<8, rest/binary>> -> escape_loop rest (acc <> <<92, 98>>)
-  <<9, rest/binary>> -> escape_loop rest (acc <> <<92, 116>>)
-  <<10, rest/binary>> -> escape_loop rest (acc <> <<92, 110>>)
-  <<12, rest/binary>> -> escape_loop rest (acc <> <<92, 102>>)
-  <<13, rest/binary>> -> escape_loop rest (acc <> <<92, 114>>)
-  <<c:8, rest/binary>> when c < 32 -> escape_loop rest (acc <> unicode_escape c)
-  <<c:8, rest/binary>> -> escape_loop rest (acc <> <<c>>)
-}
+# Emit the clean run [skip, skip+len) as a single zero-copy slice, if non-empty.
+fun flush : BitString -> Int -> Int -> List BitString -> List BitString
+flush orig skip len acc =
+  if len > 0 then BS.slice skip len orig :: acc else acc
+
+# Two-byte escape sequences as constant fragments.
+fun esc_quote : BitString
+esc_quote = BS.from_list [92, 34] # \"
+
+fun esc_bs : BitString
+esc_bs = BS.from_list [92, 92] # \\
+
+fun esc_b : BitString
+esc_b = BS.from_list [92, 98] # \b
+
+fun esc_t : BitString
+esc_t = BS.from_list [92, 116] # \t
+
+fun esc_n : BitString
+esc_n = BS.from_list [92, 110] # \n
+
+fun esc_f : BitString
+esc_f = BS.from_list [92, 102] # \f
+
+fun esc_r : BitString
+esc_r = BS.from_list [92, 114] # \r
 
 fun unicode_escape : Int -> BitString
 unicode_escape c = {
