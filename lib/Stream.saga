@@ -1,0 +1,87 @@
+#@ Streaming JSON decode primitives (prototype for the fused decode path).
+#@
+#@ Each primitive parses one typed value directly from the input bytes and
+#@ returns `(value, remaining-input)` — no intermediate `Value` AST. A
+#@ derived/fused record decoder sequences these: `expect '{'`, then per
+#@ field parse the key, `expect ':'`, parse the value, `expect ',' / '}'`.
+module SagaJson.Stream
+
+import Std.BitString as BS
+import Std.Int
+import Std.List
+import SagaJson (Error)
+
+#@ Skip leading JSON whitespace, returning the rest. Exposed so a record
+#@ decoder can peek for `}` vs. the next key.
+pub fun skip_ws : BitString -> BitString
+skip_ws bs = case bs {
+  <<32, rest/binary>> -> skip_ws rest
+  <<9, rest/binary>> -> skip_ws rest
+  <<10, rest/binary>> -> skip_ws rest
+  <<13, rest/binary>> -> skip_ws rest
+  _ -> bs
+}
+
+#@ Consume a specific byte (after whitespace), returning the rest.
+pub fun expect : Int -> BitString -> Result BitString Error
+expect b bs = case skip_ws bs {
+  <<c:8, rest/binary>> when c == b -> Ok rest
+  _ -> Err (InvalidJson $"expected byte {show b}")
+}
+
+#@ Parse a JSON string value; return (decoded, rest). Unescaped runs are
+#@ sliced from the input; a string with no escapes is a single slice.
+pub fun parse_string : BitString -> Result (String, BitString) Error
+parse_string bs = case skip_ws bs {
+  <<34, rest/binary>> -> scan rest 0 0 rest []
+  _ -> Err (InvalidJson "expected string")
+}
+
+fun scan : BitString -> Int -> Int -> BitString -> List BitString -> Result (String, BitString) Error
+scan body skip len rem acc = case rem {
+  <<34, rest/binary>> -> case flush body skip len acc {
+    [single] -> Ok (BS.to_string_unchecked single, rest)
+    chunks -> Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
+  }
+  <<92, 117, _/binary>> -> Err (InvalidJson "\\u escapes not yet supported")
+  <<92, c:8, rest/binary>> -> case escape_byte c {
+    Just b -> scan body (skip + len + 2) 0 rest (BS.from_byte b :: flush body skip len acc)
+    Nothing -> Err (InvalidJson "invalid escape sequence")
+  }
+  <<_c:8, rest/binary>> -> scan body skip (len + 1) rest acc
+  _ -> Err (InvalidJson "unterminated string")
+}
+
+fun flush : BitString -> Int -> Int -> List BitString -> List BitString
+flush body skip len acc =
+  if len > 0 then BS.slice skip len body :: acc else acc
+
+fun escape_byte : Int -> Maybe Int
+escape_byte 34 = Just 34
+escape_byte 92 = Just 92
+escape_byte 47 = Just 47
+escape_byte 98 = Just 8
+escape_byte 102 = Just 12
+escape_byte 110 = Just 10
+escape_byte 114 = Just 13
+escape_byte 116 = Just 9
+escape_byte _ = Nothing
+
+#@ Parse a JSON integer; return (value, rest).
+pub fun parse_int : BitString -> Result (Int, BitString) Error
+parse_int bs = {
+  let s = skip_ws bs
+  let (len, rest) = take_int s 0
+  if len == 0 then Err (InvalidJson "expected number")
+  else case Int.parse (BS.to_string_unchecked (BS.slice 0 len s)) {
+    Just n -> Ok (n, rest)
+    Nothing -> Err (InvalidJson "invalid number")
+  }
+}
+
+fun take_int : BitString -> Int -> (Int, BitString)
+take_int rem len = case rem {
+  <<c:8, rest/binary>> when c >= 48 && c <= 57 || c == 45 || c == 43 ->
+    take_int rest (len + 1)
+  _ -> (len, rem)
+}
