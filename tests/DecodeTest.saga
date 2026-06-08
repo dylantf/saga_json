@@ -104,6 +104,25 @@ tests () = {
       })
     })
 
+    describe "string escape parsing (scan-and-slice)" (fun () -> {
+      test "clean string is a single slice" (fun () ->
+        assert_eq (J.parse D.string "\"plain text here\"") (Ok "plain text here"))
+      test "escaped quote mid-string" (fun () ->
+        assert_eq (J.parse D.string "\"a\\\"b\"") (Ok "a\"b"))
+      test "escaped newline decodes to LF" (fun () ->
+        assert_eq (J.parse D.string "\"a\\nb\"") (Ok "a\nb"))
+      test "escaped backslash" (fun () ->
+        assert_eq (J.parse D.string "\"a\\\\b\"") (Ok "a\\b"))
+      test "consecutive escapes, no clean run between" (fun () ->
+        assert_eq (J.parse D.string "\"\\t\\n\"") (Ok "\t\n"))
+      test "leading escape then clean run" (fun () ->
+        assert_eq (J.parse D.string "\"\\nrest\"") (Ok "\nrest"))
+      test "multibyte utf-8 in a clean run" (fun () ->
+        assert_eq (J.parse D.string "\"café\"") (Ok "café"))
+      test "escaped key in object" (fun () ->
+        assert_eq (J.parse (D.at "a\"b" D.int) "{\"a\\\"b\":1}") (Ok 1))
+    })
+
     describe "list_of" (fun () -> {
       test "empty array" (fun () ->
         assert_eq (decode (D.list_of D.int) (E.array [])) (Ok []))

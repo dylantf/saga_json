@@ -63,24 +63,35 @@ escape_byte 114 = Just 13 # \r
 escape_byte 116 = Just 9 # \t
 escape_byte _ = Nothing
 
-fun parse_string_body : BitString -> BitString -> Result (String, BitString) String
-parse_string_body bs acc = case bs {
-  <<34, rest/binary>> -> case BS.to_string acc {
+# Scan a string body with a binary match context, slicing clean runs out
+# of `body` instead of rebuilding byte-by-byte. `body` is the full content
+# binary (just past the opening quote); `skip`/`len` track the offset and
+# length of the current clean run; `rem` is the unconsumed tail; `acc` is
+# the reversed fragment list. A string with no escapes flushes a single
+# zero-copy slice over the whole content — no per-byte append.
+fun parse_string_body : BitString -> Int -> Int -> BitString -> List BitString -> Result (String, BitString) String
+parse_string_body body skip len rem acc = case rem {
+  <<34, rest/binary>> -> case BS.to_string (BS.concat (List.reverse (flush_chunk body skip len acc))) {
     Ok s -> Ok (s, rest)
     Err e -> Err $"invalid utf-8 in string: {e}"
   }
   <<92, 117, _/binary>> -> Err "\\u escapes not yet supported"
   <<92, c:8, rest/binary>> -> case escape_byte c {
-    Just b -> parse_string_body rest (acc <> BS.from_byte b)
+    Just b -> parse_string_body body (skip + len + 2) 0 rest (BS.from_byte b :: flush_chunk body skip len acc)
     Nothing -> Err $"invalid escape sequence: \\{c}"
   }
-  <<c:8, rest/binary>> -> parse_string_body rest (acc <> BS.from_byte c)
+  <<_c:8, rest/binary>> -> parse_string_body body skip (len + 1) rest acc
   _ -> Err "unterminated string"
 }
 
+# Emit the clean run [skip, skip+len) as a single zero-copy slice, if non-empty.
+fun flush_chunk : BitString -> Int -> Int -> List BitString -> List BitString
+flush_chunk body skip len acc =
+  if len > 0 then BS.slice skip len body :: acc else acc
+
 fun parse_string : BitString -> Result (Value, BitString) String
 parse_string bs = case bs {
-  <<34, rest/binary>> -> case parse_string_body rest <<>> {
+  <<34, rest/binary>> -> case parse_string_body rest 0 0 rest [] {
     Ok (s, t) -> Ok (VString s, t)
     Err e -> Err e
   }
@@ -102,27 +113,29 @@ is_float_byte c = c == 46
   || c == 101
   || c == 69 # '.', 'e', 'E'
 
-fun take_number_loop : BitString -> BitString -> Bool -> (BitString, BitString, Bool)
-take_number_loop bs acc is_float = case bs {
+# Scan the number bytes with a match context, counting the run length
+# instead of appending each byte. Returns (length, tail, is_float); the
+# digits are sliced out of the original binary in one shot by the caller.
+fun take_number_loop : BitString -> Int -> Bool -> (Int, BitString, Bool)
+take_number_loop rem len is_float = case rem {
   <<c:8, rest/binary>> when is_num_byte c ->
-    take_number_loop rest (acc <> BS.from_byte c) (is_float || is_float_byte c)
-  _ -> (acc, bs, is_float)
+    take_number_loop rest (len + 1) (is_float || is_float_byte c)
+  _ -> (len, rem, is_float)
 }
 
 fun parse_number : BitString -> Result (Value, BitString) String
 parse_number bs = {
-  let (numbs, rest, is_float) = take_number_loop bs <<>> False
-  case BS.to_string numbs {
-    Err e -> Err $"bad number bytes: {e}"
-    Ok s ->
-      if is_float then case Float.parse s {
-        Just f -> Ok (VFloat f, rest)
-        Nothing -> Err $"invalid float: {s}"
-      }
-      else case Int.parse s {
-        Just n -> Ok (VInt n, rest)
-        Nothing -> Err $"invalid int: {s}"
-      }
+  let (len, rest, is_float) = take_number_loop bs 0 False
+  # Number bytes are all ASCII (matched by `is_num_byte`), so the zero-copy
+  # slice is valid UTF-8 by construction — no validation pass needed.
+  let s = BS.to_string_unchecked (BS.slice 0 len bs)
+  if is_float then case Float.parse s {
+    Just f -> Ok (VFloat f, rest)
+    Nothing -> Err $"invalid float: {s}"
+  }
+  else case Int.parse s {
+    Just n -> Ok (VInt n, rest)
+    Nothing -> Err $"invalid int: {s}"
   }
 }
 
@@ -157,7 +170,7 @@ parse_array bs = case bs {
 
 fun parse_object_key : BitString -> Result (String, BitString) String
 parse_object_key bs = case bs {
-  <<34, rest/binary>> -> parse_string_body rest <<>>
+  <<34, rest/binary>> -> parse_string_body rest 0 0 rest []
   _ -> Err "expected string key in object"
 }
 
