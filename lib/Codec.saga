@@ -1,0 +1,350 @@
+#@ Fast JSON codec: encode straight to iodata, decode straight from bytes
+#@ into the target type — no intermediate `Json`/`Value` AST on either side.
+#@
+#@ This is the throughput path and the eventual `deriving` target. The
+#@ `Value`-based `SagaJson.Encode` / `SagaJson.Decode` remain the flexible
+#@ path (dynamic JSON, combinators, post-processing, internally-tagged /
+#@ untagged sums).
+#@
+#@ Options are read once from the `JsonOptions` effect at the `serialize` /
+#@ `deserialize` boundary and threaded down explicitly as an `Options`
+#@ value, so the per-node code never touches the effect.
+module SagaJson.Codec
+
+import Std.BitString as BS
+import Std.Float
+import Std.Int
+import Std.List
+import Std.String
+import SagaJson (
+  Error,
+  Options,
+  JsonOptions,
+  json_defaults
+)
+
+# --- Iodata (encode output) ---
+
+#@ A tree of binary fragments. Built compositionally, flattened once by
+#@ `to_string`. `IoStr` carries an ordinary String fragment; `IoBytes`
+#@ carries a raw slice (used by the escaper for zero-copy clean runs).
+pub type Iodata =
+  | IoStr String
+  | IoBytes BitString
+  | IoMany (List Iodata)
+
+# --- Encode trait ---
+
+#@ Types that encode to a JSON `Iodata` tree. `to_json` takes the active
+#@ `Options` (threaded from the entry point) and the value. Library impls
+#@ thread `opts` to their children; record/variant impls consult it for
+#@ `rename_all`, `omit_nothings`, and tag format.
+pub trait ToJson a {
+  fun to_json : Options -> a -> Iodata
+}
+
+impl ToJson for String {
+  to_json _opts s = escape_io s
+}
+
+impl ToJson for Int {
+  to_json _opts n = IoStr (show n)
+}
+
+impl ToJson for Float {
+  to_json _opts f = IoStr (show f)
+}
+
+impl ToJson for Bool {
+  to_json _opts b = IoStr (if b then "true" else "false")
+}
+
+impl ToJson for Maybe a where {a: ToJson} {
+  to_json opts m = case m {
+    Nothing -> IoStr "null"
+    Just x -> to_json opts x
+  }
+}
+
+impl ToJson for List a where {a: ToJson} {
+  to_json opts xs = IoMany (IoStr "[" :: intersperse_commas opts xs)
+}
+
+fun intersperse_commas : Options -> List a -> List Iodata where {a: ToJson}
+intersperse_commas opts xs = case xs {
+  [] -> [IoStr "]"]
+  [x] -> [to_json opts x, IoStr "]"]
+  x :: rest -> to_json opts x :: IoStr "," :: intersperse_commas opts rest
+}
+
+# --- Encode entry points ---
+
+#@ Encode a value to a compact JSON string using the canonical defaults.
+pub fun serialize : a -> String where {a: ToJson}
+serialize x = serialize_with x with json_defaults
+
+#@ Encode a value, reading the active options from the ambient
+#@ `JsonOptions` handler once and threading them down.
+pub fun serialize_with : a -> String needs {JsonOptions} where {a: ToJson}
+serialize_with x = {
+  let opts = get_json_options! ()
+  to_string (to_json opts x)
+}
+
+#@ Flatten an `Iodata` tree to a String in one pass.
+pub fun to_string : Iodata -> String
+to_string io = BS.to_string_unchecked (BS.concat (List.reverse (collect io [])))
+
+fun collect : Iodata -> List BitString -> List BitString
+collect io acc = case io {
+  IoStr s -> BS.from_string s :: acc
+  IoBytes b -> b :: acc
+  IoMany xs -> collect_list xs acc
+}
+
+fun collect_list : List Iodata -> List BitString -> List BitString
+collect_list xs acc = case xs {
+  [] -> acc
+  h :: t -> collect_list t (collect h acc)
+}
+
+# --- Iodata string escaping (zero-copy clean runs) ---
+
+fun escape_io : String -> Iodata
+escape_io s = {
+  let bs = BS.from_string s
+  let frags = scan_str bs 0 0 bs []
+  IoMany (IoStr "\"" :: with_close_quote frags)
+}
+
+fun with_close_quote : List BitString -> List Iodata
+with_close_quote frags = revcat frags [IoStr "\""]
+
+fun revcat : List BitString -> List Iodata -> List Iodata
+revcat xs acc = case xs {
+  [] -> acc
+  x :: rest -> revcat rest (IoBytes x :: acc)
+}
+
+fun scan_str : BitString -> Int -> Int -> BitString -> List BitString -> List BitString
+scan_str orig skip len rem acc = case rem {
+  <<>> -> flush_str orig skip len acc
+  <<34, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_quote :: flush_str orig skip len acc)
+  <<92, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_bs :: flush_str orig skip len acc)
+  <<8, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_b :: flush_str orig skip len acc)
+  <<9, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_t :: flush_str orig skip len acc)
+  <<10, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_n :: flush_str orig skip len acc)
+  <<12, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_f :: flush_str orig skip len acc)
+  <<13, rest/binary>> -> scan_str orig (skip + len + 1) 0 rest (esc_r :: flush_str orig skip len acc)
+  <<c:8, rest/binary>> when c < 32 ->
+    scan_str orig (skip + len + 1) 0 rest (unicode_escape c :: flush_str orig skip len acc)
+  <<_c:8, rest/binary>> -> scan_str orig skip (len + 1) rest acc
+}
+
+fun flush_str : BitString -> Int -> Int -> List BitString -> List BitString
+flush_str orig skip len acc =
+  if len > 0 then BS.slice skip len orig :: acc else acc
+
+fun esc_quote : BitString
+esc_quote = BS.from_list [92, 34]
+
+fun esc_bs : BitString
+esc_bs = BS.from_list [92, 92]
+
+fun esc_b : BitString
+esc_b = BS.from_list [92, 98]
+
+fun esc_t : BitString
+esc_t = BS.from_list [92, 116]
+
+fun esc_n : BitString
+esc_n = BS.from_list [92, 110]
+
+fun esc_f : BitString
+esc_f = BS.from_list [92, 102]
+
+fun esc_r : BitString
+esc_r = BS.from_list [92, 114]
+
+fun unicode_escape : Int -> BitString
+unicode_escape c = {
+  let padded = String.pad_left 2 "0" (Int.to_hex c)
+  BS.from_string $"\\u00{padded}"
+}
+
+# --- Decode trait ---
+
+#@ Types that decode directly from JSON bytes. `from_json` takes the active
+#@ `Options` and the remaining input, returning the decoded value and the
+#@ unconsumed tail. Library impls ignore `opts`; record/variant impls use
+#@ it for `rename_all` and tag format.
+pub trait FromJson a {
+  fun from_json : Options -> BitString -> Result (a, BitString) Error
+}
+
+impl FromJson for String {
+  from_json _opts bs = parse_string bs
+}
+
+impl FromJson for Int {
+  from_json _opts bs = parse_int bs
+}
+
+impl FromJson for Float {
+  from_json _opts bs = parse_float bs
+}
+
+impl FromJson for Bool {
+  from_json _opts bs = parse_bool bs
+}
+
+impl FromJson for Maybe a where {a: FromJson} {
+  from_json opts bs = case skip_ws bs {
+    <<"null", rest/binary>> -> Ok (Nothing, rest)
+    other -> case from_json opts other {
+      Ok (v, rest) -> Ok (Just v, rest)
+      Err e -> Err e
+    }
+  }
+}
+
+impl FromJson for List a where {a: FromJson} {
+  from_json opts bs = case expect 91 bs {
+    Ok rest -> case skip_ws rest {
+      <<93, rest2/binary>> -> Ok ([], rest2)
+      first -> decode_elems opts first []
+    }
+    Err e -> Err e
+  }
+}
+
+fun decode_elems : Options -> BitString -> List a -> Result (List a, BitString) Error
+  where {a: FromJson}
+decode_elems opts bs acc = case from_json opts bs {
+  Err e -> Err e
+  Ok (v, rest) -> case skip_ws rest {
+    <<44, rest2/binary>> -> decode_elems opts rest2 (v :: acc)
+    <<93, rest2/binary>> -> Ok (List.reverse (v :: acc), rest2)
+    _ -> Err (InvalidJson "expected ',' or ']' in array")
+  }
+}
+
+# --- Decode entry points ---
+
+#@ Parse and decode a JSON string into the target type using defaults.
+pub fun deserialize : String -> Result a Error where {a: FromJson}
+deserialize s = deserialize_with s with json_defaults
+
+#@ Parse and decode, reading options once from the ambient handler.
+pub fun deserialize_with : String -> Result a Error
+  needs {JsonOptions}
+  where {a: FromJson}
+deserialize_with s = {
+  let opts = get_json_options! ()
+  case from_json opts (BS.from_string s) {
+    Ok (v, rest) ->
+      if BS.is_empty (skip_ws rest) then Ok v
+      else Err (InvalidJson "trailing content after JSON value")
+    Err e -> Err e
+  }
+}
+
+# --- Streaming decode primitives (used by record/variant decoders) ---
+
+#@ Skip leading JSON whitespace.
+pub fun skip_ws : BitString -> BitString
+skip_ws bs = case bs {
+  <<32, rest/binary>> -> skip_ws rest
+  <<9, rest/binary>> -> skip_ws rest
+  <<10, rest/binary>> -> skip_ws rest
+  <<13, rest/binary>> -> skip_ws rest
+  _ -> bs
+}
+
+#@ Consume a specific byte (after whitespace), returning the rest.
+pub fun expect : Int -> BitString -> Result BitString Error
+expect b bs = case skip_ws bs {
+  <<c:8, rest/binary>> when c == b -> Ok rest
+  _ -> Err (InvalidJson $"expected byte {show b}")
+}
+
+#@ Parse a JSON string value; return (decoded, rest).
+pub fun parse_string : BitString -> Result (String, BitString) Error
+parse_string bs = case skip_ws bs {
+  <<34, rest/binary>> -> scan_in rest 0 0 rest []
+  _ -> Err (InvalidJson "expected string")
+}
+
+fun scan_in : BitString -> Int -> Int -> BitString -> List BitString -> Result (String, BitString) Error
+scan_in body skip len rem acc = case rem {
+  <<34, rest/binary>> -> case flush_str body skip len acc {
+    [single] -> Ok (BS.to_string_unchecked single, rest)
+    chunks -> Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
+  }
+  <<92, 117, _/binary>> -> Err (InvalidJson "\\u escapes not yet supported")
+  <<92, c:8, rest/binary>> -> case unescape_byte c {
+    Just b -> scan_in body (skip + len + 2) 0 rest (BS.from_byte b :: flush_str body skip len acc)
+    Nothing -> Err (InvalidJson "invalid escape sequence")
+  }
+  <<_c:8, rest/binary>> -> scan_in body skip (len + 1) rest acc
+  _ -> Err (InvalidJson "unterminated string")
+}
+
+fun unescape_byte : Int -> Maybe Int
+unescape_byte 34 = Just 34
+unescape_byte 92 = Just 92
+unescape_byte 47 = Just 47
+unescape_byte 98 = Just 8
+unescape_byte 102 = Just 12
+unescape_byte 110 = Just 10
+unescape_byte 114 = Just 13
+unescape_byte 116 = Just 9
+unescape_byte _ = Nothing
+
+#@ Parse a JSON integer; return (value, rest).
+pub fun parse_int : BitString -> Result (Int, BitString) Error
+parse_int bs = {
+  let s = skip_ws bs
+  let (len, rest, _is_float) = take_number s 0 False
+  if len == 0 then Err (InvalidJson "expected number")
+  else case Int.parse (BS.to_string_unchecked (BS.slice 0 len s)) {
+    Just n -> Ok (n, rest)
+    Nothing -> Err (InvalidJson "invalid number")
+  }
+}
+
+#@ Parse a JSON number as a Float (accepts integers too).
+pub fun parse_float : BitString -> Result (Float, BitString) Error
+parse_float bs = {
+  let s = skip_ws bs
+  let (len, rest, is_float) = take_number s 0 False
+  if len == 0 then Err (InvalidJson "expected number")
+  else {
+    let numstr = BS.to_string_unchecked (BS.slice 0 len s)
+    if is_float then case Float.parse numstr {
+      Just f -> Ok (f, rest)
+      Nothing -> Err (InvalidJson "invalid float")
+    }
+    else case Int.parse numstr {
+      Just n -> Ok (Int.to_float n, rest)
+      Nothing -> Err (InvalidJson "invalid number")
+    }
+  }
+}
+
+fun take_number : BitString -> Int -> Bool -> (Int, BitString, Bool)
+take_number rem len is_float = case rem {
+  <<c:8, rest/binary>> when c >= 48 && c <= 57 || c == 45 || c == 43 ->
+    take_number rest (len + 1) is_float
+  <<c:8, rest/binary>> when c == 46 || c == 101 || c == 69 ->
+    take_number rest (len + 1) True
+  _ -> (len, rem, is_float)
+}
+
+#@ Parse a JSON boolean; return (value, rest).
+pub fun parse_bool : BitString -> Result (Bool, BitString) Error
+parse_bool bs = case skip_ws bs {
+  <<"true", rest/binary>> -> Ok (True, rest)
+  <<"false", rest/binary>> -> Ok (False, rest)
+  _ -> Err (InvalidJson "expected boolean")
+}

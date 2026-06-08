@@ -1,0 +1,143 @@
+module CodecTest
+
+import Std.BitString as BS
+import Std.Test (Testing, describe, test, assert_eq, assert_err)
+import SagaJson (
+  Error,
+  apply_name_style,
+  CamelCase,
+  rename_keys,
+  json_opts
+)
+import SagaJson.Codec as C
+import SagaJson.Codec (ToJson, FromJson, IoStr, IoMany, expect, parse_string, parse_int)
+
+# A record with snake_case fields so `rename_all CamelCase` is visible.
+# Hand-written impls stand in for what the codegen will emit: they consult
+# the threaded `opts` for key renaming.
+record Pt {
+  first_x: Int,
+  second_y: Int,
+} deriving (Eq, Debug)
+
+impl ToJson for Pt {
+  to_json opts p = {
+    let kx = apply_name_style opts.rename_all "first_x"
+    let ky = apply_name_style opts.rename_all "second_y"
+    IoMany [
+      IoStr ("{\"" <> kx <> "\":"),
+      to_json opts p.first_x,
+      IoStr (",\"" <> ky <> "\":"),
+      to_json opts p.second_y,
+      IoStr "}",
+    ]
+  }
+}
+
+impl FromJson for Pt {
+  from_json opts bs = {
+    let kx = apply_name_style opts.rename_all "first_x"
+    let ky = apply_name_style opts.rename_all "second_y"
+    do {
+      Ok r0 <- expect 123 bs
+      Ok (k1, r1) <- parse_string r0
+      Ok r1b <- key_is kx k1 r1
+      Ok r2 <- expect 58 r1b
+      Ok (v1, r3) <- parse_int r2
+      Ok r3b <- expect 44 r3
+      Ok (k2, r4) <- parse_string r3b
+      Ok r4b <- key_is ky k2 r4
+      Ok r5 <- expect 58 r4b
+      Ok (v2, r6) <- parse_int r5
+      Ok r7 <- expect 125 r6
+      Ok (Pt { first_x: v1, second_y: v2 }, r7)
+    } else {
+      Err e -> Err e
+    }
+  }
+}
+
+# Build a String from raw bytes — for testing sub-0x20 escape behavior.
+fun bytes_to_string : BitString -> String
+bytes_to_string bs = case BS.to_string bs {
+  Ok s -> s
+  Err _ -> "<<invalid utf-8 in test fixture>>"
+}
+
+fun key_is : String -> String -> BitString -> Result BitString Error
+key_is expected actual bs =
+  if expected == actual then Ok bs
+  else Err (InvalidJson $"expected key '{expected}'")
+
+fun enc_camel : Pt -> String
+enc_camel p = {
+  let h = json_opts (rename_keys CamelCase)
+  C.serialize_with p with h
+}
+
+fun roundtrip_camel : Pt -> Result Pt Error
+roundtrip_camel p = {
+  let h = json_opts (rename_keys CamelCase)
+  let s = C.serialize_with p with h
+  C.deserialize_with s with h
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "Codec" (fun () -> {
+    describe "encode primitives" (fun () -> {
+      test "int" (fun () -> assert_eq (C.serialize 42) "42")
+      test "string" (fun () -> assert_eq (C.serialize "hi") "\"hi\"")
+      test "string with escape" (fun () -> assert_eq (C.serialize "a\"b") "\"a\\\"b\"")
+      test "bool" (fun () -> assert_eq (C.serialize True) "true")
+      test "list" (fun () -> assert_eq (C.serialize [1, 2, 3]) "[1,2,3]")
+      test "maybe nothing" (fun () ->
+        assert_eq (C.serialize (Nothing : Maybe Int)) "null")
+    })
+
+    describe "string escaping" (fun () -> {
+      test "backslash" (fun () -> assert_eq (C.serialize "a\\b") "\"a\\\\b\"")
+      test "newline + tab" (fun () ->
+        assert_eq (C.serialize (bytes_to_string (BS.from_list [10, 9])))
+          "\"\\n\\t\"")
+      test "control char -> \\u00XX" (fun () ->
+        assert_eq (C.serialize (bytes_to_string (BS.from_list [1]))) "\"\\u0001\"")
+      test "clean run preserved between escapes" (fun () ->
+        assert_eq (C.serialize (bytes_to_string (BS.from_list [120, 121, 34, 122])))
+          "\"xy\\\"z\"")
+      test "multibyte utf-8 passes through" (fun () ->
+        assert_eq (C.serialize (bytes_to_string (BS.from_list [195, 169])))
+          (bytes_to_string (BS.from_list [34, 195, 169, 34])))
+    })
+
+    describe "decode primitives" (fun () -> {
+      test "int" (fun () -> assert_eq (C.deserialize "42" : Result Int Error) (Ok 42))
+      test "string" (fun () ->
+        assert_eq (C.deserialize "\"hi\"" : Result String Error) (Ok "hi"))
+      test "bool" (fun () ->
+        assert_eq (C.deserialize "true" : Result Bool Error) (Ok True))
+      test "list" (fun () ->
+        assert_eq (C.deserialize "[1,2,3]" : Result (List Int) Error) (Ok [1, 2, 3]))
+      test "trailing content fails" (fun () ->
+        assert_err (C.deserialize "1 2" : Result Int Error))
+    })
+
+    describe "record round-trip (default options)" (fun () -> {
+      test "encode" (fun () ->
+        assert_eq (C.serialize (Pt { first_x: 1, second_y: 2 }))
+          "{\"first_x\":1,\"second_y\":2}")
+      test "decode" (fun () ->
+        assert_eq (C.deserialize "{\"first_x\":1,\"second_y\":2}" : Result Pt Error)
+          (Ok (Pt { first_x: 1, second_y: 2 })))
+    })
+
+    describe "options threading (rename_all CamelCase)" (fun () -> {
+      test "encode renames keys" (fun () ->
+        assert_eq (enc_camel (Pt { first_x: 1, second_y: 2 }))
+          "{\"firstX\":1,\"secondY\":2}")
+      test "round-trip under CamelCase" (fun () ->
+        assert_eq (roundtrip_camel (Pt { first_x: 3, second_y: 4 }))
+          (Ok (Pt { first_x: 3, second_y: 4 })))
+    })
+  })
+}
