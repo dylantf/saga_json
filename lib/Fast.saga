@@ -10,11 +10,11 @@
 #@ wire `JsonOptions` in once the perf shape is validated.
 module SagaJson.Fast
 
-import Std.BitString as BS
 import Std.Int
 import Std.List
 import Std.String
 import SagaJson (Error)
+import SagaJson.Escape as Escape
 import SagaJson.Parser (Value)
 import SagaJson.Parser as Parser
 
@@ -121,7 +121,8 @@ impl FromJsonString for List a where {a: FromJsonString} {
   }
 }
 
-fun decode_list : List Value -> List a -> Result (List a) Error where {a: FromJsonString}
+fun decode_list : List Value -> List a -> Result (List a) Error
+  where {a: FromJsonString}
 decode_list items acc = case items {
   [] -> Ok (List.reverse acc)
   x :: rest -> case decode_value x {
@@ -180,37 +181,8 @@ expect_object v = case v {
 }
 
 # --- String escaping ---
-#
-# Walks bytes; backslash-escapes the JSON specials, `\u00XX`-escapes
-# remaining sub-0x20 bytes, passes everything else through. Output is
-# wrapped in `"..."`.
 
-#@ Escape a Saga String as a JSON-quoted string literal.
+#@ Escape a Saga String as a JSON-quoted string literal. Shared
+#@ implementation in `SagaJson.Escape`.
 pub fun escape_string : String -> String
-escape_string s = {
-  let escaped = escape_loop (BS.from_string s) <<>>
-  case BS.to_string escaped {
-    Ok r -> $"\"{r}\""
-    Err _ -> $"\"{s}\""
-  }
-}
-
-fun escape_loop : BitString -> BitString -> BitString
-escape_loop bs acc = case bs {
-  <<>> -> acc
-  <<34, rest/binary>> -> escape_loop rest (acc <> <<92, 34>>)
-  <<92, rest/binary>> -> escape_loop rest (acc <> <<92, 92>>)
-  <<8, rest/binary>> -> escape_loop rest (acc <> <<92, 98>>)
-  <<9, rest/binary>> -> escape_loop rest (acc <> <<92, 116>>)
-  <<10, rest/binary>> -> escape_loop rest (acc <> <<92, 110>>)
-  <<12, rest/binary>> -> escape_loop rest (acc <> <<92, 102>>)
-  <<13, rest/binary>> -> escape_loop rest (acc <> <<92, 114>>)
-  <<c:8, rest/binary>> when c < 32 -> escape_loop rest (acc <> unicode_escape c)
-  <<c:8, rest/binary>> -> escape_loop rest (acc <> <<c>>)
-}
-
-fun unicode_escape : Int -> BitString
-unicode_escape c = {
-  let padded = String.pad_left 2 "0" (Int.to_hex c)
-  BS.from_string $"\\u00{padded}"
-}
+escape_string s = Escape.escape_string s

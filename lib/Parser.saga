@@ -63,17 +63,21 @@ escape_byte 114 = Just 13 # \r
 escape_byte 116 = Just 9 # \t
 escape_byte _ = Nothing
 
-# Scan a string body with a binary match context, slicing clean runs out
-# of `body` instead of rebuilding byte-by-byte. `body` is the full content
-# binary (just past the opening quote); `skip`/`len` track the offset and
-# length of the current clean run; `rem` is the unconsumed tail; `acc` is
-# the reversed fragment list. A string with no escapes flushes a single
-# zero-copy slice over the whole content — no per-byte append.
+# Scan a string body and collect its decoded content as a list of binary
+# chunks. `body` is the full content binary (just past the opening quote);
+# `skip`/`len` are the offset and length of the current unescaped run;
+# `rem` is the unconsumed tail; `acc` is the chunk list in reverse order.
+# Unescaped runs are sliced from `body`; escape sequences contribute their
+# decoded byte. A string with no escapes is a single chunk.
+#
+# Chunks are not UTF-8 validated: `body` is valid by contract and run
+# boundaries fall only on the ASCII bytes `"` and `\`, never inside a
+# multi-byte sequence, so each chunk is valid.
 fun parse_string_body : BitString -> Int -> Int -> BitString -> List BitString -> Result (String, BitString) String
 parse_string_body body skip len rem acc = case rem {
-  <<34, rest/binary>> -> case BS.to_string (BS.concat (List.reverse (flush_chunk body skip len acc))) {
-    Ok s -> Ok (s, rest)
-    Err e -> Err $"invalid utf-8 in string: {e}"
+  <<34, rest/binary>> -> case flush_chunk body skip len acc {
+    [single] -> Ok (BS.to_string_unchecked single, rest)
+    chunks -> Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
   }
   <<92, 117, _/binary>> -> Err "\\u escapes not yet supported"
   <<92, c:8, rest/binary>> -> case escape_byte c {
@@ -100,34 +104,25 @@ parse_string bs = case bs {
 
 # --- Numbers ---
 
-fun is_num_byte : Int -> Bool
-is_num_byte c = c >= 48 && c <= 57
-  || c == 45
-  || c == 43
-  || c == 46
-  || c == 101
-  || c == 69
-
-fun is_float_byte : Int -> Bool
-is_float_byte c = c == 46
-  || c == 101
-  || c == 69 # '.', 'e', 'E'
-
-# Scan the number bytes with a match context, counting the run length
-# instead of appending each byte. Returns (length, tail, is_float); the
-# digits are sliced out of the original binary in one shot by the caller.
+# Scan the number bytes, returning (length, tail, is_float). The caller
+# slices the digits out of the original binary; `is_float` is True when a
+# `.`, `e` or `E` appears among them.
 fun take_number_loop : BitString -> Int -> Bool -> (Int, BitString, Bool)
 take_number_loop rem len is_float = case rem {
-  <<c:8, rest/binary>> when is_num_byte c ->
-    take_number_loop rest (len + 1) (is_float || is_float_byte c)
+  # digit (0-9), '-' or '+': part of the number, not a float marker
+  <<c:8, rest/binary>> when c >= 48 && c <= 57 || c == 45 || c == 43 ->
+    take_number_loop rest (len + 1) is_float
+  # '.', 'e' or 'E': makes it a float
+  <<c:8, rest/binary>> when c == 46 || c == 101 || c == 69 ->
+    take_number_loop rest (len + 1) True
   _ -> (len, rem, is_float)
 }
 
 fun parse_number : BitString -> Result (Value, BitString) String
 parse_number bs = {
   let (len, rest, is_float) = take_number_loop bs 0 False
-  # Number bytes are all ASCII (matched by `is_num_byte`), so the zero-copy
-  # slice is valid UTF-8 by construction — no validation pass needed.
+  # Number bytes are all ASCII (matched by the digit/sign/exponent guards),
+  # so the zero-copy slice is valid UTF-8 — no validation pass needed.
   let s = BS.to_string_unchecked (BS.slice 0 len bs)
   if is_float then case Float.parse s {
     Just f -> Ok (VFloat f, rest)

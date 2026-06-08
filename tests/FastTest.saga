@@ -1,0 +1,59 @@
+module FastTest
+
+import Std.Test (Testing, describe, test, assert_eq, assert_err)
+import SagaJson (Error)
+import SagaJson.Fast (
+  ToJsonString,
+  FromJsonString,
+  serialize,
+  deserialize,
+  expect_object,
+  decode_field
+)
+
+record Point {
+  x: Int,
+  y: Int,
+} deriving (Eq, Debug)
+
+impl ToJsonString for Point {
+  to_json_string p =
+    "{\"x\":" <> to_json_string p.x <> ",\"y\":" <> to_json_string p.y <> "}"
+}
+
+impl FromJsonString for Point {
+  decode_value v = do {
+    Ok fields <- expect_object v
+    Ok x <- decode_field "x" fields
+    Ok y <- decode_field "y" fields
+    Ok (Point { x: x, y: y })
+  } else {
+    Err e -> Err e
+  }
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "Fast" (fun () -> {
+    describe "decode (Dict-backed field lookup)" (fun () -> {
+      test "decodes an object" (fun () ->
+        assert_eq
+          (deserialize "{\"x\":1,\"y\":2}" : Result Point Error)
+          (Ok (Point { x: 1, y: 2 })))
+      test "field order independent" (fun () ->
+        assert_eq
+          (deserialize "{\"y\":2,\"x\":1}" : Result Point Error)
+          (Ok (Point { x: 1, y: 2 })))
+      test "missing field surfaces an error" (fun () ->
+        assert_err (deserialize "{\"x\":1}" : Result Point Error))
+      test "non-object surfaces an error" (fun () ->
+        assert_err (deserialize "42" : Result Point Error))
+    })
+    describe "round-trip" (fun () -> {
+      test "serialize then deserialize" (fun () ->
+        assert_eq
+          (deserialize (serialize (Point { x: 3, y: 4 })) : Result Point Error)
+          (Ok (Point { x: 3, y: 4 })))
+    })
+  })
+}

@@ -1,0 +1,83 @@
+#@ Internal: JSON string escaping shared by the encoders.
+#@
+#@ Walks the bytes with a binary match context: unescaped runs are sliced
+#@ from the input (zero-copy), JSON specials become their two-byte escape,
+#@ and remaining sub-0x20 bytes become `\u00XX`. The chunks are flattened
+#@ once with `BS.concat`.
+module SagaJson.Escape
+
+import Std.BitString as BS
+import Std.Int
+import Std.List
+import Std.String
+
+#@ Escape a Saga String as a JSON-quoted string literal, including the
+#@ surrounding quotes. A string with no specials is returned as a single
+#@ slice over the original wrapped in quotes.
+pub fun escape_string : String -> String
+escape_string s = {
+  let bs = BS.from_string s
+  let chunks = scan bs 0 0 bs []
+  BS.to_string_unchecked (BS.concat (dquote :: List.reverse (dquote :: chunks)))
+}
+
+# Scan `rem` tracking the offset `skip` and length `len` of the current
+# unescaped run. On a special byte, flush the run as a slice of `orig` and
+# push its escape; on an ordinary byte, extend the run. Chunks accumulate
+# in reverse order.
+fun scan : BitString -> Int -> Int -> BitString -> List BitString -> List BitString
+scan orig skip len rem acc = case rem {
+  <<>> -> flush orig skip len acc
+  <<34, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_quote :: flush orig skip len acc)
+  <<92, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_bs :: flush orig skip len acc)
+  <<8, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_b :: flush orig skip len acc)
+  <<9, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_t :: flush orig skip len acc)
+  <<10, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_n :: flush orig skip len acc)
+  <<12, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_f :: flush orig skip len acc)
+  <<13, rest/binary>> ->
+    scan orig (skip + len + 1) 0 rest (esc_r :: flush orig skip len acc)
+  <<c:8, rest/binary>> when c < 32 ->
+    scan orig (skip + len + 1) 0 rest (unicode_escape c :: flush orig skip len acc)
+  <<_c:8, rest/binary>> -> scan orig skip (len + 1) rest acc
+}
+
+# Emit the unescaped run [skip, skip+len) as one zero-copy slice, if non-empty.
+fun flush : BitString -> Int -> Int -> List BitString -> List BitString
+flush orig skip len acc =
+  if len > 0 then BS.slice skip len orig :: acc else acc
+
+fun dquote : BitString
+dquote = BS.from_byte 34
+
+fun esc_quote : BitString
+esc_quote = BS.from_list [92, 34] # \"
+
+fun esc_bs : BitString
+esc_bs = BS.from_list [92, 92] # \\
+
+fun esc_b : BitString
+esc_b = BS.from_list [92, 98] # \b
+
+fun esc_t : BitString
+esc_t = BS.from_list [92, 116] # \t
+
+fun esc_n : BitString
+esc_n = BS.from_list [92, 110] # \n
+
+fun esc_f : BitString
+esc_f = BS.from_list [92, 102] # \f
+
+fun esc_r : BitString
+esc_r = BS.from_list [92, 114] # \r
+
+fun unicode_escape : Int -> BitString
+unicode_escape c = {
+  let padded = String.pad_left 2 "0" (Int.to_hex c)
+  BS.from_string $"\\u00{padded}"
+}
