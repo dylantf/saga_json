@@ -16,12 +16,21 @@ import Std.Float
 import Std.Int
 import Std.List
 import Std.String
+import Std.Generic (Generic, U1, Leaf, Labeled, And, Or, Variant, Record, Adt)
 import SagaJson (
   Error,
   Options,
+  TagFormat,
+  ExternallyTagged,
+  AdjacentlyTagged,
+  InternallyTagged,
+  Untagged,
   JsonOptions,
-  json_defaults
+  json_defaults,
+  apply_name_style
 )
+import SagaJson.Parser (Value)
+import SagaJson.Parser as P
 
 # --- Iodata (encode output) ---
 
@@ -77,6 +86,225 @@ intersperse_commas opts xs = case xs {
   x :: rest -> to_json opts x :: IoStr "," :: intersperse_commas opts rest
 }
 
+# Tuples encode to positional JSON arrays (arity 2..10).
+impl ToJson for (a, b) where {a: ToJson, b: ToJson} {
+  to_json opts t = { let (x1, x2) = t
+    array_io [to_json opts x1, to_json opts x2] }
+}
+
+impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} {
+  to_json opts t = { let (x1, x2, x3) = t
+    array_io [to_json opts x1, to_json opts x2, to_json opts x3] }
+}
+
+impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4) = t
+    array_io [to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4] }
+}
+
+impl ToJson for (a, b, c, d, e)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5,
+    ] }
+}
+
+impl ToJson for (a, b, c, d, e, f)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5, x6) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5, to_json opts x6,
+    ] }
+}
+
+impl ToJson for (a, b, c, d, e, f, g)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
+    g: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5, to_json opts x6, to_json opts x7,
+    ] }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
+    g: ToJson, h: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
+    ] }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
+    g: ToJson, h: ToJson, i: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
+      to_json opts x9,
+    ] }
+}
+
+impl ToJson for (a, b, c, d, e, f, g, h, i, j)
+  where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
+    g: ToJson, h: ToJson, i: ToJson, j: ToJson} {
+  to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
+    array_io [
+      to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
+      to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
+      to_json opts x9, to_json opts x10,
+    ] }
+}
+
+# --- Generic Rep impls (encode) ---
+#
+# Fused mirror of SagaJson.Encode's Value-based Rep impls: same structure,
+# but each impl emits Iodata directly and threads `Options` explicitly
+# instead of reading the JsonOptions effect per node. These make
+# `deriving (ToJson)` produce fused encoders.
+
+trait ToJsonFields a {
+  fun to_fields : Options -> a -> List (String, Iodata)
+}
+
+trait ToJsonArgs a {
+  fun to_args : Options -> a -> List Iodata
+}
+
+trait VariantPayload a {
+  fun payload_io : Options -> a -> Iodata
+  fun is_unit_payload : a -> Bool
+}
+
+impl ToJson for Leaf a where {a: ToJson} {
+  to_json opts (Leaf x) = to_json opts x
+}
+
+impl ToJson for Or l r where {l: ToJson, r: ToJson} {
+  to_json opts v = case v {
+    Or_Left x -> to_json opts x
+    Or_Right x -> to_json opts x
+  }
+}
+
+impl ToJson for Record a where {a: ToJsonFields} {
+  to_json opts (Record _ inner) = {
+    let fields = to_fields opts inner
+    let kept =
+      if opts.omit_nothings then List.filter not_null_field fields else fields
+    object_io kept
+  }
+}
+
+impl ToJson for Adt a where {a: ToJson} {
+  to_json opts (Adt _ inner) = to_json opts inner
+}
+
+impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload} {
+  to_json opts (Variant payload) = {
+    let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    let p = payload_io opts payload
+    case opts.tag_format {
+      ExternallyTagged ->
+        if opts.unit_variants_as_strings && is_unit_payload payload then
+          escape_io name
+        else object_io [(name, p)]
+      AdjacentlyTagged ->
+        object_io [(opts.tag_field, escape_io name), (opts.content_field, p)]
+      Untagged -> p
+      InternallyTagged -> tag_internally opts.tag_field name p
+    }
+  }
+}
+
+# Merge the tag field into the payload's object body, via the Value bridge.
+# An object payload (single record-valued variant) gets `tag_field` prepended;
+# a `null` payload (unit variant) emits just the tag; primitive / array
+# payloads can't carry an extra key, so they fall back to the
+# externally-tagged shape — same restriction as serde. The payload Iodata is
+# re-parsed once to inspect its shape; this is the documented buffering cost
+# of InternallyTagged (the default ExternallyTagged path never pays it).
+fun tag_internally : String -> String -> Iodata -> Iodata
+tag_internally tag_field name payload = case parse_value (to_bytes payload) {
+  Ok (VObject pairs, _) ->
+    render_value (VObject ((tag_field, VString name) :: pairs))
+  Ok (VNull, _) -> object_io [(tag_field, escape_io name)]
+  _ -> object_io [(name, payload)]
+}
+
+impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
+  to_fields opts (Labeled x) = {
+    let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    [(name, to_json opts x)]
+  }
+}
+
+impl ToJsonFields for And l r where {l: ToJsonFields, r: ToJsonFields} {
+  to_fields opts (And l r) = List.append (to_fields opts l) (to_fields opts r)
+}
+
+impl ToJsonArgs for Leaf a where {a: ToJson} {
+  to_args opts (Leaf x) = [to_json opts x]
+}
+
+impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  to_args opts (And l r) = List.append (to_args opts l) (to_args opts r)
+}
+
+impl VariantPayload for U1 {
+  payload_io _ _ = IoStr "null"
+  is_unit_payload _ = True
+}
+
+impl VariantPayload for Leaf a where {a: ToJson} {
+  payload_io opts (Leaf x) = to_json opts x
+  is_unit_payload _ = False
+}
+
+impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
+  payload_io opts v = case v {
+    And l r -> array_io (List.append (to_args opts l) (to_args opts r))
+  }
+  is_unit_payload _ = False
+}
+
+# Assemble an object `{"k":v,...}` / array `[v,...]` as Iodata. Keys are
+# escaped; values are already-rendered Iodata.
+fun object_io : List (String, Iodata) -> Iodata
+object_io fields = IoMany (IoStr "{" :: obj_body fields)
+
+fun obj_body : List (String, Iodata) -> List Iodata
+obj_body fields = case fields {
+  [] -> [IoStr "}"]
+  [(k, v)] -> [field_io k v, IoStr "}"]
+  (k, v) :: rest -> field_io k v :: IoStr "," :: obj_body rest
+}
+
+fun field_io : String -> Iodata -> Iodata
+field_io k v = IoMany [escape_io k, IoStr ":", v]
+
+fun array_io : List Iodata -> Iodata
+array_io xs = IoMany (IoStr "[" :: arr_body xs)
+
+fun arr_body : List Iodata -> List Iodata
+arr_body xs = case xs {
+  [] -> [IoStr "]"]
+  [x] -> [x, IoStr "]"]
+  x :: rest -> x :: IoStr "," :: arr_body rest
+}
+
+fun not_null_field : (String, Iodata) -> Bool
+not_null_field (_, v) = case v {
+  IoStr "null" -> False
+  _ -> True
+}
+
 # --- Encode entry points ---
 
 #@ Encode a value to a compact JSON string using the canonical defaults.
@@ -91,9 +319,37 @@ serialize_with x = {
   to_string (to_json opts x)
 }
 
+#@ Call the Generic-derived encoding explicitly, so a hand-written
+#@ `impl ToJson` can start from the derived shape and post-process. Without
+#@ this the trait dispatch can't reach the derived impl (the hand-written
+#@ impl shadows it).
+pub fun derive : Options -> a -> Iodata where {a: Generic r, r: ToJson}
+derive opts x = to_json opts (to x)
+
+#@ Encoding strategy: emit every variant as a bare JSON string of its tag
+#@ name, dropping payload data. Lossy by design. Mirror of `as_enum_from`.
+pub fun as_enum : Options -> a -> Iodata where {a: ToJson}
+as_enum opts x = case parse_value (to_bytes (to_json opts x)) {
+  Ok (VObject pairs, _) -> case pairs {
+    (name, _) :: _ -> escape_io name
+    [] -> to_json opts x
+  }
+  _ -> to_json opts x
+}
+
+#@ Encoding strategy: force the externally-tagged `{"Variant": payload}`
+#@ shape for unit variants too (overrides `unit_variants_as_strings`).
+pub fun as_tagged : Options -> a -> Iodata where {a: ToJson}
+as_tagged opts x = to_json { opts | unit_variants_as_strings: False } x
+
 #@ Flatten an `Iodata` tree to a String in one pass.
 pub fun to_string : Iodata -> String
-to_string io = BS.to_string_unchecked (BS.concat (List.reverse (collect io [])))
+to_string io = BS.to_string_unchecked (to_bytes io)
+
+#@ Flatten an `Iodata` tree to a raw `BitString` in one pass. Used by the
+#@ Value bridge to re-parse a rendered payload without a String detour.
+pub fun to_bytes : Iodata -> BitString
+to_bytes io = BS.concat (List.reverse (collect io []))
 
 fun collect : Iodata -> List BitString -> List BitString
 collect io acc = case io {
@@ -106,6 +362,43 @@ fun collect_list : List Iodata -> List BitString -> List BitString
 collect_list xs acc = case xs {
   [] -> acc
   h :: t -> collect_list t (collect h acc)
+}
+
+# --- Value bridge ---
+#
+# Lets hand-written custom impls stay ergonomic by building/consuming a
+# `Value` (the flexible Value-track AST) and crossing into the fused world,
+# and lets tag formats that need buffering (InternallyTagged, and any future
+# reordering case) fall back to a Value round-trip. The fused fast path never
+# touches these; they exist for the cases single-pass can't express.
+
+#@ Render a concrete `Value` to fused `Iodata`. Keys are emitted verbatim
+#@ (any `rename_all` was already applied when the `Value` was built), so no
+#@ `Options` are consulted. Reuses the same object/array/string assembly as
+#@ the fused encoders.
+pub fun render_value : Value -> Iodata
+render_value v = case v {
+  VNull -> IoStr "null"
+  VBool True -> IoStr "true"
+  VBool False -> IoStr "false"
+  VInt n -> IoStr (show n)
+  VFloat f -> IoStr (show f)
+  VString s -> escape_io s
+  VArray items -> array_io (List.map render_value items)
+  VObject pairs -> object_io (List.map render_value_pair pairs)
+}
+
+fun render_value_pair : (String, Value) -> (String, Iodata)
+render_value_pair (k, v) = (k, render_value v)
+
+#@ Parse a single JSON value from bytes into a `Value`, returning the
+#@ unconsumed tail. The buffering counterpart to the fused streaming
+#@ decoders: used by custom impls and by tag formats that must inspect a
+#@ whole sub-value before deciding its shape.
+pub fun parse_value : BitString -> Result (Value, BitString) Error
+parse_value bs = case P.parse_value bs {
+  Ok r -> Ok r
+  Err msg -> Err (InvalidJson msg)
 }
 
 # --- Iodata string escaping (zero-copy clean runs) ---
@@ -229,6 +522,560 @@ decode_elems opts bs acc = case from_json opts bs {
   }
 }
 
+# Decode one array-element slice to a value, discarding its inner tail.
+fun dec1 : Options -> BitString -> Result a Error where {a: FromJson}
+dec1 opts s = case from_json opts s {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
+}
+
+# Tuples decode from positional JSON arrays; length must match arity exactly.
+impl FromJson for (a, b) where {a: FromJson, b: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok ((v1, v2), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 2" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c) where {a: FromJson, b: FromJson, c: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok ((v1, v2, v3), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 3" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok ((v1, v2, v3, v4), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 4" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok ((v1, v2, v3, v4, v5), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 5" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e, f)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5, s6] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok v6 <- dec1 opts s6
+        Ok ((v1, v2, v3, v4, v5, v6), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 6" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e, f, g)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5, s6, s7] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok v6 <- dec1 opts s6
+        Ok v7 <- dec1 opts s7
+        Ok ((v1, v2, v3, v4, v5, v6, v7), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 7" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson, h: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5, s6, s7, s8] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok v6 <- dec1 opts s6
+        Ok v7 <- dec1 opts s7
+        Ok v8 <- dec1 opts s8
+        Ok ((v1, v2, v3, v4, v5, v6, v7, v8), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 8" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h, i)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson, h: FromJson, i: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5, s6, s7, s8, s9] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok v6 <- dec1 opts s6
+        Ok v7 <- dec1 opts s7
+        Ok v8 <- dec1 opts s8
+        Ok v9 <- dec1 opts s9
+        Ok ((v1, v2, v3, v4, v5, v6, v7, v8, v9), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 9" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+impl FromJson for (a, b, c, d, e, f, g, h, i, j)
+  where {a: FromJson, b: FromJson, c: FromJson, d: FromJson, e: FromJson,
+    f: FromJson, g: FromJson, h: FromJson, i: FromJson, j: FromJson} {
+  from_json opts bs = do {
+    Ok (slices, rest) <- parse_array_raw bs
+    case slices {
+      [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> do {
+        Ok v1 <- dec1 opts s1
+        Ok v2 <- dec1 opts s2
+        Ok v3 <- dec1 opts s3
+        Ok v4 <- dec1 opts s4
+        Ok v5 <- dec1 opts s5
+        Ok v6 <- dec1 opts s6
+        Ok v7 <- dec1 opts s7
+        Ok v8 <- dec1 opts s8
+        Ok v9 <- dec1 opts s9
+        Ok v10 <- dec1 opts s10
+        Ok ((v1, v2, v3, v4, v5, v6, v7, v8, v9, v10), rest)
+      } else { Err e -> Err e }
+      _ -> Err (InvalidShape "Array of 10" "wrong length" [])
+    }
+  } else { Err e -> Err e }
+}
+
+# --- Generic Rep impls (decode) ---
+#
+# Fused mirror of SagaJson.Decode's Value-based Rep impls. Records decode
+# by splitting the object once into (key, value-byte-slice) pairs, then each
+# Labeled field looks up its key and decodes its slice (arbitrary key order,
+# no Json AST). Externally-tagged variants are supported on the fast path;
+# other tag formats fall back (see TODO) to the Value bridge.
+
+trait FromJsonFields a {
+  fun from_fields : Options -> List (String, BitString) -> Result a Error
+}
+
+trait FromJsonArgs a {
+  fun from_args : Options -> List BitString -> Result (a, List BitString) Error
+}
+
+trait FromVariantPayload a {
+  fun decode_payload : Options -> BitString -> Result a Error
+}
+
+impl FromJson for Leaf a where {a: FromJson} {
+  from_json opts bs = case from_json opts bs {
+    Ok (v, rest) -> Ok (Leaf v, rest)
+    Err e -> Err e
+  }
+}
+
+impl FromJson for Or l r where {l: FromJson, r: FromJson} {
+  from_json opts bs = case from_json opts bs {
+    Ok (v, rest) -> Ok (Or_Left v, rest)
+    Err _ -> case from_json opts bs {
+      Ok (v, rest) -> Ok (Or_Right v, rest)
+      Err e -> Err e
+    }
+  }
+}
+
+impl FromJson for Record a where {a: FromJsonFields} {
+  from_json opts bs = case parse_object_raw bs {
+    Ok (pairs, rest) -> case from_fields opts pairs {
+      Ok inner -> Ok (Record "" inner, rest)
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+impl FromJson for Adt a where {a: FromJson} {
+  from_json opts bs = case from_json opts bs {
+    Ok (v, rest) -> Ok (Adt "" v, rest)
+    Err e -> Err e
+  }
+}
+
+impl FromJson for Variant (n : Symbol) a where {n: KnownSymbol, a: FromVariantPayload} {
+  from_json opts bs = {
+    let expected = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    let r = case opts.tag_format {
+      ExternallyTagged -> decode_variant_external opts expected bs
+      AdjacentlyTagged -> decode_variant_adjacent opts expected bs
+      InternallyTagged -> decode_variant_internal opts expected bs
+      Untagged -> decode_variant_untagged opts bs
+    }
+    case r {
+      Ok (payload, rest) -> Ok (Variant payload, rest)
+      Err e -> Err e
+    }
+  }
+}
+
+fun decode_variant_external : Options -> String -> BitString -> Result (a, BitString) Error
+  where {a: FromVariantPayload}
+decode_variant_external opts expected bs = {
+  let s = skip_ws bs
+  case s {
+    <<34, _/binary>> ->
+      if opts.unit_variants_as_strings then case parse_string s {
+        Ok (name, rest) ->
+          if name == expected then case decode_payload opts (BS.from_string "null") {
+            Ok v -> Ok (v, rest)
+            Err e -> Err e
+          }
+          else Err (InvalidShape $"variant '{expected}'" $"variant '{name}'" [])
+        Err e -> Err e
+      }
+      else Err (InvalidShape $"Object with variant '{expected}'" "String" [])
+    <<123, _/binary>> -> case parse_object_raw s {
+      Ok (pairs, rest) -> case lookup_raw expected pairs {
+        Just payload_slice -> case decode_payload opts payload_slice {
+          Ok v -> Ok (v, rest)
+          Err e -> Err e
+        }
+        Nothing -> Err (InvalidShape $"variant '{expected}'" "absent" [])
+      }
+      Err e -> Err e
+    }
+    _ -> Err (InvalidShape $"Object with variant '{expected}'" "other" [])
+  }
+}
+
+# AdjacentlyTagged: {<tag_field>: "Name", <content_field>: payload}.
+fun decode_variant_adjacent : Options -> String -> BitString
+  -> Result (a, BitString) Error where {a: FromVariantPayload}
+decode_variant_adjacent opts expected bs = case parse_object_raw bs {
+  Ok (pairs, rest) -> case lookup_raw opts.tag_field pairs {
+    Just tag_slice -> case parse_string tag_slice {
+      Ok (actual, _) ->
+        if actual == expected then case lookup_raw opts.content_field pairs {
+          Just content -> case decode_payload opts content {
+            Ok v -> Ok (v, rest)
+            Err e -> Err e
+          }
+          Nothing ->
+            Err (InvalidShape $"field '{opts.content_field}'" "missing"
+              [opts.content_field])
+        }
+        else Err (InvalidShape $"variant '{expected}'" $"variant '{actual}'" [])
+      Err e -> Err e
+    }
+    Nothing ->
+      Err (InvalidShape $"field '{opts.tag_field}'" "missing" [opts.tag_field])
+  }
+  Err e -> Err e
+}
+
+# InternallyTagged: {<tag_field>: "Name", ...payload fields...}. The payload is
+# the object with the tag key removed; an empty remainder is a unit variant.
+# If the tag field is absent, fall back to the externally-tagged shape.
+fun decode_variant_internal : Options -> String -> BitString
+  -> Result (a, BitString) Error where {a: FromVariantPayload}
+decode_variant_internal opts expected bs = case parse_object_raw bs {
+  Ok (pairs, rest) -> case lookup_raw opts.tag_field pairs {
+    Just tag_slice -> case parse_string tag_slice {
+      Ok (actual, _) ->
+        if actual == expected then {
+          let remaining = drop_key_raw opts.tag_field pairs
+          case remaining {
+            [] -> case decode_payload opts (BS.from_string "null") {
+              Ok v -> Ok (v, rest)
+              Err e -> Err e
+            }
+            _ -> {
+              let body = to_bytes (object_io (List.map slice_to_iodata remaining))
+              case decode_payload opts body {
+                Ok v -> Ok (v, rest)
+                Err e -> Err e
+              }
+            }
+          }
+        }
+        else Err (InvalidShape $"variant '{expected}'" $"variant '{actual}'" [])
+      Err e -> Err e
+    }
+    Nothing -> decode_variant_external opts expected bs
+  }
+  Err e -> Err e
+}
+
+# Untagged: the payload occupies the whole value; the Or chain tries each
+# variant's payload decoder until one succeeds.
+fun decode_variant_untagged : Options -> BitString
+  -> Result (a, BitString) Error where {a: FromVariantPayload}
+decode_variant_untagged opts bs = {
+  let vstart = skip_ws bs
+  case skip_value vstart {
+    Ok rest -> case decode_payload opts (BS.slice 0 (BS.size vstart - BS.size rest) vstart) {
+      Ok v -> Ok (v, rest)
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+fun drop_key_raw : String -> List (String, BitString) -> List (String, BitString)
+drop_key_raw _ [] = []
+drop_key_raw k ((k2, v) :: rest) =
+  if k == k2 then drop_key_raw k rest else (k2, v) :: drop_key_raw k rest
+
+fun slice_to_iodata : (String, BitString) -> (String, Iodata)
+slice_to_iodata (k, v) = (k, IoBytes v)
+
+impl FromJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJson} {
+  from_fields opts pairs = {
+    let key = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    case lookup_raw key pairs {
+      Just slice -> case from_json opts slice {
+        Ok (v, _) -> Ok (Labeled v)
+        Err e -> Err e
+      }
+      Nothing -> Err (InvalidShape $"field '{key}'" "missing" [key])
+    }
+  }
+}
+
+impl FromJsonFields for And l r where {l: FromJsonFields, r: FromJsonFields} {
+  from_fields opts pairs = case from_fields opts pairs {
+    Ok l -> case from_fields opts pairs {
+      Ok r -> Ok (And l r)
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+impl FromJsonArgs for Leaf a where {a: FromJson} {
+  from_args opts xs = case xs {
+    s :: rest -> case from_json opts s {
+      Ok (v, _) -> Ok (Leaf v, rest)
+      Err e -> Err e
+    }
+    [] -> Err (InvalidShape "variant argument" "end of array" [])
+  }
+}
+
+impl FromJsonArgs for And l r where {l: FromJsonArgs, r: FromJsonArgs} {
+  from_args opts xs = case from_args opts xs {
+    Ok (l, rest1) -> case from_args opts rest1 {
+      Ok (r, rest2) -> Ok (And l r, rest2)
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+impl FromVariantPayload for U1 {
+  decode_payload _ bs = case skip_ws bs {
+    <<"null", _/binary>> -> Ok U1
+    _ -> Err (InvalidShape "null" "non-null" [])
+  }
+}
+
+impl FromVariantPayload for Leaf a where {a: FromJson} {
+  decode_payload opts bs = case from_json opts bs {
+    Ok (v, _) -> Ok (Leaf v)
+    Err e -> Err e
+  }
+}
+
+impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} {
+  decode_payload opts bs = case parse_array_raw bs {
+    Ok (slices, _) -> case from_args opts slices {
+      Ok (l, rest1) -> case from_args opts rest1 {
+        Ok (r, _) -> Ok (And l r)
+        Err e -> Err e
+      }
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+# Split an object once into (key, raw-value-slice) pairs + the tail after `}`.
+fun parse_object_raw : BitString -> Result (List (String, BitString), BitString) Error
+parse_object_raw bs = case expect 123 bs {
+  Ok b0 -> obj_members b0 []
+  Err e -> Err e
+}
+
+fun obj_members : BitString -> List (String, BitString)
+  -> Result (List (String, BitString), BitString) Error
+obj_members bs acc = {
+  let s = skip_ws bs
+  case s {
+    <<125, rest/binary>> -> Ok (List.reverse acc, rest)
+    _ -> case parse_string s {
+      Ok (k, b1) -> case expect 58 b1 {
+        Ok b2 -> {
+          let vstart = skip_ws b2
+          case skip_value vstart {
+            Ok b3 -> {
+              let slice = BS.slice 0 (BS.size vstart - BS.size b3) vstart
+              case skip_ws b3 {
+                <<44, rest/binary>> -> obj_members rest ((k, slice) :: acc)
+                <<125, rest/binary>> -> Ok (List.reverse ((k, slice) :: acc), rest)
+                _ -> Err (InvalidJson "expected ',' or '}' in object")
+              }
+            }
+            Err e -> Err e
+          }
+        }
+        Err e -> Err e
+      }
+      Err e -> Err e
+    }
+  }
+}
+
+# Split an array once into raw element slices + the tail after `]`.
+fun parse_array_raw : BitString -> Result (List BitString, BitString) Error
+parse_array_raw bs = case expect 91 bs {
+  Ok b0 -> arr_members b0 []
+  Err e -> Err e
+}
+
+fun arr_members : BitString -> List BitString
+  -> Result (List BitString, BitString) Error
+arr_members bs acc = {
+  let s = skip_ws bs
+  case s {
+    <<93, rest/binary>> -> Ok (List.reverse acc, rest)
+    _ -> case skip_value s {
+      Ok b1 -> {
+        let slice = BS.slice 0 (BS.size s - BS.size b1) s
+        case skip_ws b1 {
+          <<44, rest/binary>> -> arr_members rest (slice :: acc)
+          <<93, rest/binary>> -> Ok (List.reverse (slice :: acc), rest)
+          _ -> Err (InvalidJson "expected ',' or ']' in array")
+        }
+      }
+      Err e -> Err e
+    }
+  }
+}
+
+fun lookup_raw : String -> List (String, BitString) -> Maybe BitString
+lookup_raw _ [] = Nothing
+lookup_raw k ((k2, v) :: rest) = if k == k2 then Just v else lookup_raw k rest
+
+# Skip exactly one JSON value, returning the tail. Recurses through objects
+# and arrays (strings handled so braces inside them don't miscount).
+fun skip_value : BitString -> Result BitString Error
+skip_value bs = {
+  let s = skip_ws bs
+  case s {
+    <<34, _/binary>> -> case parse_string s {
+      Ok (_v, rest) -> Ok rest
+      Err e -> Err e
+    }
+    <<123, rest/binary>> -> skip_members rest
+    <<91, rest/binary>> -> skip_elements rest
+    <<"true", rest/binary>> -> Ok rest
+    <<"false", rest/binary>> -> Ok rest
+    <<"null", rest/binary>> -> Ok rest
+    _ -> {
+      let (len, rest, _f) = take_number s 0 False
+      if len == 0 then Err (InvalidJson "expected JSON value") else Ok rest
+    }
+  }
+}
+
+fun skip_members : BitString -> Result BitString Error
+skip_members bs = case skip_ws bs {
+  <<125, rest/binary>> -> Ok rest
+  _ -> case parse_string bs {
+    Ok (_k, b1) -> case expect 58 b1 {
+      Ok b2 -> case skip_value b2 {
+        Ok b3 -> case skip_ws b3 {
+          <<44, rest/binary>> -> skip_members rest
+          <<125, rest/binary>> -> Ok rest
+          _ -> Err (InvalidJson "expected ',' or '}' in object")
+        }
+        Err e -> Err e
+      }
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
+fun skip_elements : BitString -> Result BitString Error
+skip_elements bs = case skip_ws bs {
+  <<93, rest/binary>> -> Ok rest
+  _ -> case skip_value bs {
+    Ok b1 -> case skip_ws b1 {
+      <<44, rest/binary>> -> skip_elements rest
+      <<93, rest/binary>> -> Ok rest
+      _ -> Err (InvalidJson "expected ',' or ']' in array")
+    }
+    Err e -> Err e
+  }
+}
+
 # --- Decode entry points ---
 
 #@ Parse and decode a JSON string into the target type using defaults.
@@ -248,6 +1095,27 @@ deserialize_with s = {
     Err e -> Err e
   }
 }
+
+#@ Call the Generic-derived decoding explicitly (mirror of `derive`), so a
+#@ hand-written `impl FromJson` can post-process the derived result.
+pub fun derive_from : Options -> BitString -> Result (a, BitString) Error
+  where {a: Generic r, r: FromJson}
+derive_from opts bs = case from_json opts bs {
+  Ok (rep, rest) -> Ok (from rep, rest)
+  Err e -> Err e
+}
+
+#@ Decoding strategy: accept a bare JSON string as a variant tag. Routes
+#@ through `unit_variants_as_strings: True`. Mirror of `as_enum`.
+pub fun as_enum_from : Options -> BitString -> Result (a, BitString) Error
+  where {a: FromJson}
+as_enum_from opts bs = from_json { opts | unit_variants_as_strings: True } bs
+
+#@ Decoding strategy: require the externally-tagged shape for unit variants
+#@ (overrides `unit_variants_as_strings`). Mirror of `as_tagged`.
+pub fun as_tagged_from : Options -> BitString -> Result (a, BitString) Error
+  where {a: FromJson}
+as_tagged_from opts bs = from_json { opts | unit_variants_as_strings: False } bs
 
 # --- Streaming decode primitives (used by record/variant decoders) ---
 
@@ -281,7 +1149,28 @@ scan_in body skip len rem acc = case rem {
     [single] -> Ok (BS.to_string_unchecked single, rest)
     chunks -> Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
   }
-  <<92, 117, _/binary>> -> Err (InvalidJson "\\u escapes not yet supported")
+  <<92, 117, h0:8, h1:8, h2:8, h3:8, rest/binary>> -> case hex4 h0 h1 h2 h3 {
+    Just cp ->
+      if cp >= 0xD800 && cp <= 0xDBFF then
+        # High surrogate: must be followed by a low-surrogate \uXXXX. Combine
+        # the pair into a single code point before UTF-8 encoding.
+        case rest {
+          <<92, 117, l0:8, l1:8, l2:8, l3:8, rest2/binary>> -> case hex4 l0 l1 l2 l3 {
+            Just lo ->
+              if lo >= 0xDC00 && lo <= 0xDFFF then {
+                let cab = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00)
+                scan_in body (skip + len + 12) 0 rest2 (utf8_bytes cab :: flush_str body skip len acc)
+              }
+              else Err (InvalidJson "invalid low surrogate in \\u escape")
+            Nothing -> Err (InvalidJson "invalid \\u escape")
+          }
+          _ -> Err (InvalidJson "expected low surrogate after high surrogate")
+        }
+      else if cp >= 0xDC00 && cp <= 0xDFFF then
+        Err (InvalidJson "unexpected low surrogate in \\u escape")
+      else scan_in body (skip + len + 6) 0 rest (utf8_bytes cp :: flush_str body skip len acc)
+    Nothing -> Err (InvalidJson "invalid \\u escape")
+  }
   <<92, c:8, rest/binary>> -> case unescape_byte c {
     Just b -> scan_in body (skip + len + 2) 0 rest (BS.from_byte b :: flush_str body skip len acc)
     Nothing -> Err (InvalidJson "invalid escape sequence")
@@ -289,6 +1178,32 @@ scan_in body skip len rem acc = case rem {
   <<_c:8, rest/binary>> -> scan_in body skip (len + 1) rest acc
   _ -> Err (InvalidJson "unterminated string")
 }
+
+# Parse four hex-digit bytes into a code-point Int. `Int.parse_hex` accepts
+# upper and lower case and returns Nothing on any non-hex byte.
+fun hex4 : Int -> Int -> Int -> Int -> Maybe Int
+hex4 a b c d = Int.parse_hex (BS.to_string_unchecked (BS.from_list [a, b, c, d]))
+
+# Encode a Unicode code point as its UTF-8 byte sequence. Uses div/mod rather
+# than bit ops to keep the byte math obvious.
+fun utf8_bytes : Int -> BitString
+utf8_bytes cp =
+  if cp < 0x80 then BS.from_list [cp]
+  else if cp < 0x800 then BS.from_list [
+    0xC0 + Int.div cp 64,
+    0x80 + Int.mod cp 64,
+  ]
+  else if cp < 0x10000 then BS.from_list [
+    0xE0 + Int.div cp 4096,
+    0x80 + Int.mod (Int.div cp 64) 64,
+    0x80 + Int.mod cp 64,
+  ]
+  else BS.from_list [
+    0xF0 + Int.div cp 262144,
+    0x80 + Int.mod (Int.div cp 4096) 64,
+    0x80 + Int.mod (Int.div cp 64) 64,
+    0x80 + Int.mod cp 64,
+  ]
 
 fun unescape_byte : Int -> Maybe Int
 unescape_byte 34 = Just 34

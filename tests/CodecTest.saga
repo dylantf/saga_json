@@ -7,7 +7,12 @@ import SagaJson (
   apply_name_style,
   CamelCase,
   rename_keys,
-  json_opts
+  json_opts,
+  tag_format,
+  AdjacentlyTagged,
+  InternallyTagged,
+  Untagged,
+  default_options
 )
 import SagaJson.Codec as C
 import SagaJson.Codec (ToJson, FromJson, IoStr, IoMany, expect, parse_string, parse_int)
@@ -57,6 +62,54 @@ impl FromJson for Pt {
   }
 }
 
+# Derived types — exercise the fused Generic Rep impls (deriving routes to
+# Codec's ToJson/FromJson, which have fused Rep building-block impls). Both
+# directions derive now that the compiler can splice the Generic iso into a
+# nested-return position (`Result (a, BitString) Error`).
+record PtD {
+  first_x: Int,
+  second_y: Int,
+} deriving (Eq, Debug, ToJson, FromJson)
+
+type ShapeD =
+  | CircleD Int
+  | RectD Int Int
+  | UnitD
+  deriving (Eq, Debug, ToJson, FromJson)
+
+# Nested + self-recursive derived types: the field/element types dispatch
+# through their own derived `FromJson`, so these exercise the iso splice at
+# nested positions (and, for `RecTree`, a type that mentions itself).
+record InnerD {
+  a: Int,
+  b: Int,
+} deriving (Eq, Debug, ToJson, FromJson)
+
+record OuterD {
+  tag: Int,
+  inner: InnerD,
+  many: List InnerD,
+} deriving (Eq, Debug, ToJson, FromJson)
+
+type RecTree =
+  | TLeaf Int
+  | TBranch RecTree RecTree
+  deriving (Eq, Debug, ToJson, FromJson)
+
+# A variant with a record payload, for InternallyTagged encode (the tag
+# merges into the payload object). `Pointy` is a unit variant (tag only);
+# `Numbered` carries a primitive that can't hold the tag, so it falls back
+# to the externally-tagged shape.
+record CircleR {
+  radius: Int,
+} deriving (Eq, Debug, ToJson, FromJson)
+
+type ShapeI =
+  | Circ CircleR
+  | Numbered Int
+  | Pointy
+  deriving (Eq, Debug, ToJson, FromJson)
+
 # Build a String from raw bytes — for testing sub-0x20 escape behavior.
 fun bytes_to_string : BitString -> String
 bytes_to_string bs = case BS.to_string bs {
@@ -80,6 +133,33 @@ roundtrip_camel p = {
   let h = json_opts (rename_keys CamelCase)
   let s = C.serialize_with p with h
   C.deserialize_with s with h
+}
+
+fun rt_untagged : ShapeD -> Result ShapeD Error
+rt_untagged x = {
+  let h = json_opts (tag_format Untagged)
+  let s = C.serialize_with x with h
+  C.deserialize_with s with h
+}
+
+fun rt_adjacent : ShapeD -> Result ShapeD Error
+rt_adjacent x = {
+  let h = json_opts (tag_format AdjacentlyTagged)
+  let s = C.serialize_with x with h
+  C.deserialize_with s with h
+}
+
+fun rt_internal : ShapeI -> Result ShapeI Error
+rt_internal x = {
+  let h = json_opts (tag_format InternallyTagged)
+  let s = C.serialize_with x with h
+  C.deserialize_with s with h
+}
+
+fun dec_enum_from : String -> Result ShapeD Error
+dec_enum_from s = case C.as_enum_from default_options (BS.from_string s) {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
 }
 
 pub fun tests : Unit -> Unit needs {Testing}
@@ -122,6 +202,24 @@ tests () = {
         assert_err (C.deserialize "1 2" : Result Int Error))
     })
 
+    describe "unicode \\u escapes (decode)" (fun () -> {
+      test "ascii \\u0041 -> A" (fun () ->
+        assert_eq (C.deserialize "\"\\u0041\"" : Result String Error) (Ok "A"))
+      test "2-byte \\u00e9 -> é" (fun () ->
+        assert_eq (C.deserialize "\"\\u00e9\"" : Result String Error)
+          (Ok (bytes_to_string (BS.from_list [195, 169]))))
+      test "3-byte \\u20ac -> €" (fun () ->
+        assert_eq (C.deserialize "\"\\u20ac\"" : Result String Error)
+          (Ok (bytes_to_string (BS.from_list [226, 130, 172]))))
+      test "surrogate pair \\ud83d\\ude00 -> U+1F600" (fun () ->
+        assert_eq (C.deserialize "\"\\ud83d\\ude00\"" : Result String Error)
+          (Ok (bytes_to_string (BS.from_list [240, 159, 152, 128]))))
+      test "escape between clean runs" (fun () ->
+        assert_eq (C.deserialize "\"a\\u0041b\"" : Result String Error) (Ok "aAb"))
+      test "lone high surrogate fails" (fun () ->
+        assert_err (C.deserialize "\"\\ud83d\"" : Result String Error))
+    })
+
     describe "record round-trip (default options)" (fun () -> {
       test "encode" (fun () ->
         assert_eq (C.serialize (Pt { first_x: 1, second_y: 2 }))
@@ -129,6 +227,139 @@ tests () = {
       test "decode" (fun () ->
         assert_eq (C.deserialize "{\"first_x\":1,\"second_y\":2}" : Result Pt Error)
           (Ok (Pt { first_x: 1, second_y: 2 })))
+    })
+
+    describe "derived encode (fused Rep)" (fun () -> {
+      test "record" (fun () ->
+        assert_eq (C.serialize (PtD { first_x: 1, second_y: 2 }))
+          "{\"first_x\":1,\"second_y\":2}")
+      test "variant with one arg" (fun () ->
+        assert_eq (C.serialize (CircleD 7)) "{\"CircleD\":7}")
+      test "variant with multiple args" (fun () ->
+        assert_eq (C.serialize (RectD 3 4)) "{\"RectD\":[3,4]}")
+      test "unit variant as string" (fun () ->
+        assert_eq (C.serialize UnitD) "\"UnitD\"")
+    })
+
+    describe "derived decode (fused Rep)" (fun () -> {
+      test "record" (fun () ->
+        assert_eq (C.deserialize "{\"first_x\":1,\"second_y\":2}" : Result PtD Error)
+          (Ok (PtD { first_x: 1, second_y: 2 })))
+      test "record, fields out of order" (fun () ->
+        assert_eq (C.deserialize "{\"second_y\":2,\"first_x\":1}" : Result PtD Error)
+          (Ok (PtD { first_x: 1, second_y: 2 })))
+      test "variant with one arg" (fun () ->
+        assert_eq (C.deserialize "{\"CircleD\":7}" : Result ShapeD Error)
+          (Ok (CircleD 7)))
+      test "variant with multiple args" (fun () ->
+        assert_eq (C.deserialize "{\"RectD\":[3,4]}" : Result ShapeD Error)
+          (Ok (RectD 3 4)))
+      test "unit variant as string" (fun () ->
+        assert_eq (C.deserialize "\"UnitD\"" : Result ShapeD Error) (Ok UnitD))
+    })
+
+    describe "derived round-trip (fused Rep)" (fun () -> {
+      test "record" (fun () ->
+        assert_eq (C.deserialize (C.serialize (PtD { first_x: 5, second_y: 6 })) : Result PtD Error)
+          (Ok (PtD { first_x: 5, second_y: 6 })))
+      test "one-arg variant" (fun () ->
+        assert_eq (C.deserialize (C.serialize (CircleD 9)) : Result ShapeD Error)
+          (Ok (CircleD 9)))
+      test "multi-arg variant" (fun () ->
+        assert_eq (C.deserialize (C.serialize (RectD 1 2)) : Result ShapeD Error)
+          (Ok (RectD 1 2)))
+      test "unit variant" (fun () ->
+        assert_eq (C.deserialize (C.serialize UnitD) : Result ShapeD Error)
+          (Ok UnitD))
+    })
+
+    describe "derived nested + recursive (fused Rep)" (fun () -> {
+      test "nested record + list of records round-trip" (fun () -> {
+        let o = OuterD {
+          tag: 1,
+          inner: InnerD { a: 2, b: 3 },
+          many: [InnerD { a: 4, b: 5 }, InnerD { a: 6, b: 7 }],
+        }
+        assert_eq (C.deserialize (C.serialize o) : Result OuterD Error) (Ok o)
+      })
+      test "self-recursive tree round-trip" (fun () -> {
+        let t = TBranch (TLeaf 1) (TBranch (TLeaf 2) (TLeaf 3))
+        assert_eq (C.deserialize (C.serialize t) : Result RecTree Error) (Ok t)
+      })
+    })
+
+    describe "InternallyTagged encode (Value bridge)" (fun () -> {
+      test "record payload merges tag into object" (fun () -> {
+        let h = json_opts (tag_format InternallyTagged)
+        let out = C.serialize_with (Circ (CircleR { radius: 5 })) with h
+        assert_eq out "{\"tag\":\"Circ\",\"radius\":5}"
+      })
+      test "unit variant emits tag only" (fun () -> {
+        let h = json_opts (tag_format InternallyTagged)
+        let out = C.serialize_with Pointy with h
+        assert_eq out "{\"tag\":\"Pointy\"}"
+      })
+      test "primitive payload falls back to external shape" (fun () -> {
+        let h = json_opts (tag_format InternallyTagged)
+        let out = C.serialize_with (Numbered 7) with h
+        assert_eq out "{\"Numbered\":7}"
+      })
+    })
+
+    describe "Value bridge round-trip (render_value / parse_value)" (fun () -> {
+      test "parse then render reproduces the document" (fun () -> {
+        let src = "{\"a\":1,\"b\":[true,\"x\"],\"c\":null}"
+        case C.parse_value (BS.from_string src) {
+          Ok (v, _) -> assert_eq (C.to_string (C.render_value v)) src
+          Err _ -> assert_eq "parse failed" src
+        }
+      })
+    })
+
+    describe "tuples" (fun () -> {
+      test "encode pair" (fun () ->
+        assert_eq (C.serialize ((1, "a") : (Int, String))) "[1,\"a\"]")
+      test "decode pair" (fun () ->
+        assert_eq (C.deserialize "[1,\"a\"]" : Result (Int, String) Error)
+          (Ok ((1, "a") : (Int, String))))
+      test "decode triple" (fun () ->
+        assert_eq (C.deserialize "[1,2,3]" : Result (Int, Int, Int) Error)
+          (Ok ((1, 2, 3) : (Int, Int, Int))))
+      test "wrong length fails" (fun () ->
+        assert_err (C.deserialize "[1]" : Result (Int, Int) Error))
+    })
+
+    describe "variant tag formats (derived round-trip)" (fun () -> {
+      test "untagged: single-arg" (fun () ->
+        assert_eq (rt_untagged (CircleD 7)) (Ok (CircleD 7)))
+      test "untagged: multi-arg" (fun () ->
+        assert_eq (rt_untagged (RectD 3 4)) (Ok (RectD 3 4)))
+      test "untagged: unit" (fun () ->
+        assert_eq (rt_untagged UnitD) (Ok UnitD))
+      test "adjacent: single-arg" (fun () ->
+        assert_eq (rt_adjacent (CircleD 7)) (Ok (CircleD 7)))
+      test "adjacent: multi-arg" (fun () ->
+        assert_eq (rt_adjacent (RectD 3 4)) (Ok (RectD 3 4)))
+      test "internal: record payload" (fun () ->
+        assert_eq (rt_internal (Circ (CircleR { radius: 9 })))
+          (Ok (Circ (CircleR { radius: 9 }))))
+      test "internal: primitive payload (external fallback)" (fun () ->
+        assert_eq (rt_internal (Numbered 5)) (Ok (Numbered 5)))
+      test "internal: unit variant" (fun () ->
+        assert_eq (rt_internal Pointy) (Ok Pointy))
+    })
+
+    describe "enum strategies (as_enum / as_tagged / derive)" (fun () -> {
+      test "as_enum drops payload to bare tag" (fun () ->
+        assert_eq (C.to_string (C.as_enum default_options (CircleD 7)))
+          "\"CircleD\"")
+      test "as_tagged wraps unit variant" (fun () ->
+        assert_eq (C.to_string (C.as_tagged default_options UnitD))
+          "{\"UnitD\":null}")
+      test "as_enum_from decodes bare unit tag" (fun () ->
+        assert_eq (dec_enum_from "\"UnitD\"") (Ok UnitD))
+      test "as_enum_from fails on payload-bearing tag" (fun () ->
+        assert_err (dec_enum_from "\"CircleD\""))
     })
 
     describe "options threading (rename_all CamelCase)" (fun () -> {

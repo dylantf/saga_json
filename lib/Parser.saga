@@ -35,7 +35,10 @@ skip_ws bs = case bs {
 
 # --- Top-level dispatch ---
 
-fun parse_value : BitString -> Result (Value, BitString) String
+#@ Parse a single JSON value, returning it with the unconsumed tail. Unlike
+#@ `parse`, this does not require the input to be fully consumed — used by
+#@ `SagaJson.Codec`'s Value bridge for tag formats that need buffering.
+pub fun parse_value : BitString -> Result (Value, BitString) String
 parse_value bs = {
   let s = skip_ws bs
   case s {
