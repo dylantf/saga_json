@@ -27,13 +27,19 @@ person_decoder j = Person {
   email: D.at "email" (D.nullable D.string) j,
 }
 
-val good_input = """{"name":"Alice","age":30,"email":"alice@example.com"}"""
-val no_email = """{"name":"Bob","age":25,"email":null}"""
-val wrong_type = """{"name":"Eve","age":"thirty","email":null}"""
-
 pub fun run : Unit -> Unit
 run () = {
   dbg "=== Decoding by hand ==="
+
+  let good_input = """
+    {"name":"Alice","age":30,"email":"alice@example.com"}
+    """
+  let no_email = """
+    {"name":"Bob","age":25,"email":null}
+    """
+  let wrong_type = """
+    {"name":"Eve","age":"thirty","email":null}
+    """
 
   # `J.parse decoder string` parses the string into Json and runs the
   # decoder, returning Result a Error.

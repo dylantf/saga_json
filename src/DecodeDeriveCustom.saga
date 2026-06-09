@@ -1,0 +1,93 @@
+#@ Decoding with `deriving (FromJson)` plus customization via the
+#@ `JsonOptions` effect.
+#@
+#@ Mirror of `EncodeDeriveCustom` on the decode side. Instead of threading
+#@ an `Options` argument, install a `JsonOptions` handler at the call
+#@ boundary; `deserialize_with` reads the ambient options. Common use
+#@ cases: input JSON uses camelCase keys while your fields are snake_case,
+#@ or the input uses a different tagged-union shape than the default.
+module DecodeDeriveCustom
+
+import Std.BitString as BS
+import SagaJson as J (
+  json_opts,
+  rename_keys,
+  tag_format,
+  tag_field,
+  content_field,
+  CamelCase,
+  AdjacentlyTagged,
+  default_options
+)
+import SagaJson.Codec as C (
+  FromJson,
+  deserialize_with,
+  as_enum_from,
+  as_tagged_from
+)
+
+# Saga fields are snake_case. With `rename_all: CamelCase` we tell the
+# decoder to look up camelCase keys in the input instead.
+record User {
+  first_name: String,
+  last_name: String,
+} deriving (Debug, FromJson)
+
+type Status =
+  | Active
+  | Pending
+  | Closed
+  deriving (Debug, FromJson)
+
+# as_enum_from / as_tagged_from take a BitString and return the decoded
+# value paired with the unconsumed tail. These helpers pin the result type
+# to `Status` and drop the tail.
+fun decode_enum : String -> Result Status J.Error
+decode_enum s = case as_enum_from default_options (BS.from_string s) {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
+}
+
+fun decode_tagged : String -> Result Status J.Error
+decode_tagged s = case as_tagged_from default_options (BS.from_string s) {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
+}
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Decoding by derive with customization ==="
+
+  # Rename: input keys are camelCase, fields are snake_case. Build a
+  # handler with json_opts and attach it to the block via `with`; one
+  # handler covers any number of nested deserializations.
+  let camel = json_opts (rename_keys CamelCase)
+  let camel_input = """
+    {"firstName":"Ada","lastName":"Lovelace"}
+    """
+  {
+    dbg (deserialize_with camel_input : Result User J.Error)
+  } with camel
+
+  # Tag format: switch from the default external tag ("Active") to
+  # adjacent ({"tag":"Active","value":null}). Setters compose with `>>`.
+  let adjacent =
+    json_opts (tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value")
+  let adjacent_input = """
+    {"tag":"Active","value":null}
+    """
+  {
+    dbg (deserialize_with adjacent_input : Result Status J.Error)
+  } with adjacent
+
+  # as_enum_from: bare-string variant decoding. Routes through the default
+  # externally-tagged path with `unit_variants_as_strings: True`, so both
+  # `"Active"` and the legacy `{"Active":null}` decode the same value.
+  # Mirror of `SagaJson.Codec.as_enum`. Takes an explicit Options value.
+  dbg (decode_enum "\"Pending\"")
+
+  # as_tagged_from: require the wrapped `{"Closed":null}` form for unit
+  # variants. Useful for decoding JSON produced before the default
+  # refinement, or by encoders that always wrap unit variants.
+  dbg (decode_tagged "{\"Closed\":null}")
+}

@@ -6,7 +6,7 @@
 module DecodeDerive
 
 import SagaJson as J
-import SagaJson.Decode as D (FromJson, deserialize)
+import SagaJson.Codec (FromJson, deserialize)
 
 record Person {
   name: String,
@@ -35,13 +35,16 @@ pub fun run : Unit -> Unit
 run () = {
   dbg "=== Decoding by derive ==="
 
-  let person_json = """{"name":"Alice","age":30}"""
+  let person_json = """
+    {"name":"Alice","age":30}
+    """
   dbg (deserialize person_json : Result Person J.Error)
 
   let role_json = "\"Admin\""
   dbg (deserialize role_json : Result Role J.Error)
 
-  let account_json =
-    """{"person":{"name":"Alice","age":30},"role":"Editor"}"""
+  let account_json = """
+    {"person":{"name":"Alice","age":30},"role":"Editor"}
+    """
   dbg (deserialize account_json : Result Account J.Error)
 }

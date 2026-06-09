@@ -5,7 +5,7 @@
 #@ constructors emit externally-tagged variants by default.
 module EncodeDerive
 
-import SagaJson.Encode as E (ToJson, serialize)
+import SagaJson.Codec (ToJson, serialize)
 
 record Person {
   name: String,
@@ -45,5 +45,5 @@ run () = {
   # need `ToJson`; nesting and composition with `Maybe` / `List` works.
   dbg (serialize (1, "hello"))
   dbg (serialize (1.5, 2.5, 3.5))
-  dbg (serialize (Just 1, Nothing : Maybe Int, "x"))
+  dbg (serialize (Just 1, (Nothing : Maybe Int), "x"))
 }
