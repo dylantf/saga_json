@@ -1,30 +1,76 @@
 #@ Encoding Saga types into JSON by writing `impl ToJson` by hand.
 #@
-#@ Use this when you want full control over the output shape — custom
-#@ key names, computed fields, or any JSON layout that doesn't match the
-#@ type definition. Build the output with the `C.object` / `C.array`
-#@ builders, producing each value by recursing through `to_json opts`.
+#@ Use this when you want full control over the output shape — custom key
+#@ names, computed fields, or any JSON layout that doesn't match the type
+#@ definition. A hand-written fused `ToJson` returns `Iodata`: assemble it
+#@ with the `C.object` / `C.array` builders, and produce each field value by
+#@ recursing through `to_json opts`. That recursion both threads the ambient
+#@ `Options` and reuses the library impls (Int, String, Maybe, List, nested
+#@ records, ...), so you only hand-write the parts you actually want to
+#@ control.
 module EncodeHand
 
-import SagaJson.Codec as C (ToJson, serialize)
+import SagaJson (Options)
+import SagaJson.Codec as C (ToJson)
 
-record Person {
-  name: String,
-  age: Int,
+type Role =
+  | Admin
+  | Editor
+  | Viewer
+
+record Address {
+  street: String,
+  city: String,
 }
 
-# `to_json` takes the ambient Options plus the value and produces Iodata.
-# Here the shape is hard-coded, so `opts` is just threaded down to each
-# nested `to_json opts field` — that dispatches to the String / Int impl
-# and keeps renaming/tag options flowing to nested values.
-impl ToJson for Person {
-  to_json opts p =
-    C.object [("name", to_json opts p.name), ("age", to_json opts p.age)]
+record User {
+  id: Int,
+  name: String,
+  email: String,
+  age: Maybe Int,
+  role: Role,
+  address: Address,
+  tags: List String,
+}
+
+# A value producer returns `Iodata`. `to_json opts "Admin"` encodes the
+# String as a quoted, escaped JSON string fragment.
+fun encode_role : Options -> Role -> C.Iodata
+encode_role opts r =
+  to_json opts (case r {
+    Admin -> "Admin"
+    Editor -> "Editor"
+    Viewer -> "Viewer"
+  })
+
+fun encode_address : Options -> Address -> C.Iodata
+encode_address opts a =
+  C.object [("street", to_json opts a.street), ("city", to_json opts a.city)]
+
+impl ToJson for User {
+  to_json opts u =
+    C.object [
+      ("id", to_json opts u.id),
+      ("name", to_json opts u.name),
+      ("email", to_json opts u.email),
+      ("age", to_json opts u.age),
+      ("role", encode_role opts u.role),
+      ("address", encode_address opts u.address),
+      ("tags", to_json opts u.tags),
+    ]
 }
 
 pub fun run : Unit -> Unit
 run () = {
   dbg "=== Encoding by hand ==="
-  let p = Person { name: "Alice", age: 30 }
-  dbg (serialize p)
+  let u = User {
+    id: 123,
+    name: "John Smith",
+    email: "john.smith@plymouth.co",
+    age: Just 35,
+    role: Admin,
+    address: Address { street: "123 Fake St", city: "Springfield" },
+    tags: ["active", "verified"],
+  }
+  dbg (C.serialize u)
 }
