@@ -1,0 +1,98 @@
+#@ Encoding with `deriving (ToJson)` plus customization via the
+#@ `JsonOptions` effect.
+#@
+#@ Instead of threading an `Options` argument through every call, install
+#@ a `JsonOptions` handler at the call boundary. `serialize_with` reads
+#@ from the ambient handler; one `with h` covers any number of nested
+#@ serializations.
+module EncodeDeriveCustom
+
+import SagaJson as J (
+  json_opts,
+  rename_keys,
+  omit_nothings,
+  tag_format,
+  tag_field,
+  content_field,
+  CamelCase,
+  AdjacentlyTagged,
+  default_options
+)
+import SagaJson.Codec as C (ToJson, serialize_with, as_enum, as_tagged)
+
+record User {
+  first_name: String,
+  last_name: String,
+} deriving (Debug, ToJson)
+
+type Status =
+  | Active
+  | Pending
+  | Closed
+  deriving (Debug, ToJson)
+
+# Mixed ADT: unit + payload-bearing variants together. Shows the
+# per-variant default and how the override strategies treat it.
+type Event =
+  | Heartbeat
+  | Login Int
+  | Click Int Int
+  deriving (Debug, ToJson)
+
+record Notification {
+  message: String,
+  details: Maybe String,
+} deriving (Debug, ToJson)
+
+pub fun run : Unit -> Unit
+run () = {
+  dbg "=== Encoding by derive with customization ==="
+  #   # rename_all: emit camelCase keys for snake_case fields. Build a
+  #   # handler with json_opts and attach it to the block via `with`.
+  let camel = json_opts (rename_keys CamelCase)
+  {
+    dbg (serialize_with (User { first_name: "Ada", last_name: "Lovelace" }))
+  } with camel
+
+  #   # tag_format: adjacently-tagged ADT variants. Setters compose with
+  #   # `>>` so a multi-knob policy fits on one line.
+  let adjacent =
+    json_opts (tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value")
+  {
+    dbg (serialize_with Active)
+  } with adjacent
+
+  #   # omit_nothings: drop `Nothing`-valued `Maybe` fields. Warning: the
+  #   # resulting JSON does NOT round-trip through `deserialize_with` on
+  #   # the same options — the decoder treats a missing field as an error.
+  let omit = json_opts omit_nothings
+  {
+    dbg (serialize_with (Notification { message: "hello", details: Nothing }))
+  } with omit
+
+  #   # Multiple serializations under one handler — the case the ambient
+  #   # JsonOptions effect is built for. One policy covers them all.
+  let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
+  {
+    dbg (serialize_with (User { first_name: "Grace", last_name: "Hopper" }))
+    dbg (serialize_with (Notification { message: "ok", details: Nothing }))
+    dbg (serialize_with Active)
+  } with api_shape
+
+  let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
+  {
+    dbg (serialize_with (User { first_name: "Grace", last_name: "Hopper" }))
+    dbg (serialize_with (Notification { message: "ok", details: Nothing }))
+    dbg (serialize_with Active)
+  } with api_shape
+
+  # as_enum: drop any payload, emit only the variant tag as a bare
+  # string. Lossy by design. These take an explicit Options value.
+  dbg (C.to_string (as_enum default_options Heartbeat))
+  dbg (C.to_string (as_enum default_options (Login 42)))
+
+  # as_tagged: force the externally-tagged `{"V": payload}` shape
+  # uniformly, including for unit variants.
+  dbg (C.to_string (as_tagged default_options Heartbeat))
+  dbg (C.to_string (as_tagged default_options (Login 42)))
+}
