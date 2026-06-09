@@ -34,13 +34,49 @@ import SagaJson.Parser as P
 
 # --- Iodata (encode output) ---
 
-#@ A tree of binary fragments. Built compositionally, flattened once by
-#@ `to_string`. `IoStr` carries an ordinary String fragment; `IoBytes`
-#@ carries a raw slice (used by the escaper for zero-copy clean runs).
-pub type Iodata =
-  | IoStr String
-  | IoBytes BitString
-  | IoMany (List Iodata)
+#@ A piece of pre-rendered JSON output, built compositionally and flattened
+#@ once by `to_string` / `to_bytes`.
+#@
+#@ At runtime an `Iodata` is a BEAM iolist: a binary, or a (possibly nested)
+#@ list of `Iodata`. The encoders never allocate a tagged tree — `raw` and
+#@ `concat` are zero-cost coercions onto the underlying iolist, so flattening
+#@ is a single `iolist_to_binary` C pass with no Saga-level traversal. The
+#@ type is opaque so this representation can keep evolving; build values with
+#@ `object` / `array` (the easy path) or `raw` / `concat` (the escape hatch).
+opaque type Iodata = Iodata
+
+# Zero-cost coercions. `std_bitstring_bridge:from_string` is the identity
+# `S -> S` at runtime; reused here purely as a typed no-op so a binary or a
+# list becomes an `Iodata` without copying or tagging. `concat`/`iolist`
+# below flatten via `std_bitstring_bridge:concat` (= `iolist_to_binary`).
+
+#@ Emit a String fragment verbatim as `Iodata` (already-rendered JSON bytes).
+#@ The escape hatch for hand-written impls that build output the `object` /
+#@ `array` helpers can't express. No escaping or validation is applied.
+@external("erlang", "std_bitstring_bridge", "from_string")
+pub fun raw : String -> Iodata
+
+# Internal: lift a raw byte slice (e.g. a zero-copy escaper run) to `Iodata`.
+@external("erlang", "std_bitstring_bridge", "from_string")
+fun raw_bytes : BitString -> Iodata
+
+#@ Group a list of `Iodata` fragments into one, concatenated with no
+#@ separator. The grouping counterpart to `raw` for hand-written impls.
+@external("erlang", "std_bitstring_bridge", "from_string")
+pub fun concat : List Iodata -> Iodata
+
+#@ Flatten an `Iodata` to a raw `BitString` in one pass. Used by the Value
+#@ bridge to re-parse a rendered payload without a String detour.
+@external("erlang", "std_bitstring_bridge", "concat")
+pub fun to_bytes : Iodata -> BitString
+
+#@ Flatten an `Iodata` tree to a String in one pass.
+@external("erlang", "std_bitstring_bridge", "concat")
+pub fun to_string : Iodata -> String
+
+# Shared "null" fragment bytes, for the omit_nothings field filter.
+fun null_bytes : BitString
+null_bytes = BS.from_string "null"
 
 # --- Encode trait ---
 
@@ -57,33 +93,33 @@ impl ToJson for String {
 }
 
 impl ToJson for Int {
-  to_json _opts n = IoStr (show n)
+  to_json _opts n = raw (show n)
 }
 
 impl ToJson for Float {
-  to_json _opts f = IoStr (show f)
+  to_json _opts f = raw (show f)
 }
 
 impl ToJson for Bool {
-  to_json _opts b = IoStr (if b then "true" else "false")
+  to_json _opts b = raw (if b then "true" else "false")
 }
 
 impl ToJson for Maybe a where {a: ToJson} {
   to_json opts m = case m {
-    Nothing -> IoStr "null"
+    Nothing -> raw "null"
     Just x -> to_json opts x
   }
 }
 
 impl ToJson for List a where {a: ToJson} {
-  to_json opts xs = IoMany (IoStr "[" :: intersperse_commas opts xs)
+  to_json opts xs = concat (raw "[" :: intersperse_commas opts xs)
 }
 
 fun intersperse_commas : Options -> List a -> List Iodata where {a: ToJson}
 intersperse_commas opts xs = case xs {
-  [] -> [IoStr "]"]
-  [x] -> [to_json opts x, IoStr "]"]
-  x :: rest -> to_json opts x :: IoStr "," :: intersperse_commas opts rest
+  [] -> [raw "]"]
+  [x] -> [to_json opts x, raw "]"]
+  x :: rest -> to_json opts x :: raw "," :: intersperse_commas opts rest
 }
 
 # Tuples encode to positional JSON arrays (arity 2..10).
@@ -258,7 +294,7 @@ impl ToJsonArgs for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
 }
 
 impl VariantPayload for U1 {
-  payload_io _ _ = IoStr "null"
+  payload_io _ _ = raw "null"
   is_unit_payload _ = True
 }
 
@@ -287,17 +323,17 @@ impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
 #@     ]
 #@   }
 pub fun object : List (String, Iodata) -> Iodata
-object fields = IoMany (IoStr "{" :: obj_body fields)
+object fields = concat (raw "{" :: obj_body fields)
 
 fun obj_body : List (String, Iodata) -> List Iodata
 obj_body fields = case fields {
-  [] -> [IoStr "}"]
-  [(k, v)] -> [field_io k v, IoStr "}"]
-  (k, v) :: rest -> field_io k v :: IoStr "," :: obj_body rest
+  [] -> [raw "}"]
+  [(k, v)] -> [field_io k v, raw "}"]
+  (k, v) :: rest -> field_io k v :: raw "," :: obj_body rest
 }
 
 fun field_io : String -> Iodata -> Iodata
-field_io k v = IoMany [escape_io k, IoStr ":", v]
+field_io k v = concat [escape_io k, raw ":", v]
 
 #@ Assemble a JSON array from a list of already-rendered `Iodata`
 #@ elements, for hand-written `ToJson` impls. Produce elements with
@@ -307,20 +343,20 @@ field_io k v = IoMany [escape_io k, IoStr ":", v]
 #@     to_json opts p = array [to_json opts p.fst, to_json opts p.snd]
 #@   }
 pub fun array : List Iodata -> Iodata
-array xs = IoMany (IoStr "[" :: arr_body xs)
+array xs = concat (raw "[" :: arr_body xs)
 
 fun arr_body : List Iodata -> List Iodata
 arr_body xs = case xs {
-  [] -> [IoStr "]"]
-  [x] -> [x, IoStr "]"]
-  x :: rest -> x :: IoStr "," :: arr_body rest
+  [] -> [raw "]"]
+  [x] -> [x, raw "]"]
+  x :: rest -> x :: raw "," :: arr_body rest
 }
 
+# omit_nothings filter: a `Maybe Nothing` field renders to exactly the bytes
+# "null"; drop those. Flattening here is paid only under omit_nothings (off by
+# default), so the hot path never reaches it.
 fun not_null_field : (String, Iodata) -> Bool
-not_null_field (_, v) = case v {
-  IoStr "null" -> False
-  _ -> True
-}
+not_null_field (_, v) = to_bytes v != null_bytes
 
 # --- Encode entry points ---
 
@@ -359,28 +395,6 @@ as_enum opts x = case parse_value (to_bytes (to_json opts x)) {
 pub fun as_tagged : Options -> a -> Iodata where {a: ToJson}
 as_tagged opts x = to_json { opts | unit_variants_as_strings: False } x
 
-#@ Flatten an `Iodata` tree to a String in one pass.
-pub fun to_string : Iodata -> String
-to_string io = BS.to_string_unchecked (to_bytes io)
-
-#@ Flatten an `Iodata` tree to a raw `BitString` in one pass. Used by the
-#@ Value bridge to re-parse a rendered payload without a String detour.
-pub fun to_bytes : Iodata -> BitString
-to_bytes io = BS.concat (List.reverse (collect io []))
-
-fun collect : Iodata -> List BitString -> List BitString
-collect io acc = case io {
-  IoStr s -> BS.from_string s :: acc
-  IoBytes b -> b :: acc
-  IoMany xs -> collect_list xs acc
-}
-
-fun collect_list : List Iodata -> List BitString -> List BitString
-collect_list xs acc = case xs {
-  [] -> acc
-  h :: t -> collect_list t (collect h acc)
-}
-
 # --- Value bridge ---
 #
 # Lets hand-written custom impls stay ergonomic by building/consuming a
@@ -395,11 +409,11 @@ collect_list xs acc = case xs {
 #@ the fused encoders.
 pub fun render_value : Value -> Iodata
 render_value v = case v {
-  VNull -> IoStr "null"
-  VBool True -> IoStr "true"
-  VBool False -> IoStr "false"
-  VInt n -> IoStr (show n)
-  VFloat f -> IoStr (show f)
+  VNull -> raw "null"
+  VBool True -> raw "true"
+  VBool False -> raw "false"
+  VInt n -> raw (show n)
+  VFloat f -> raw (show f)
   VString s -> escape_io s
   VArray items -> array (List.map render_value items)
   VObject pairs -> object (List.map render_value_pair pairs)
@@ -424,16 +438,16 @@ fun escape_io : String -> Iodata
 escape_io s = {
   let bs = BS.from_string s
   let frags = scan_str bs 0 0 bs []
-  IoMany (IoStr "\"" :: with_close_quote frags)
+  concat (raw "\"" :: with_close_quote frags)
 }
 
 fun with_close_quote : List BitString -> List Iodata
-with_close_quote frags = revcat frags [IoStr "\""]
+with_close_quote frags = revcat frags [raw "\""]
 
 fun revcat : List BitString -> List Iodata -> List Iodata
 revcat xs acc = case xs {
   [] -> acc
-  x :: rest -> revcat rest (IoBytes x :: acc)
+  x :: rest -> revcat rest (raw_bytes x :: acc)
 }
 
 fun scan_str : BitString -> Int -> Int -> BitString -> List BitString -> List BitString
@@ -900,7 +914,7 @@ drop_key_raw k ((k2, v) :: rest) =
   if k == k2 then drop_key_raw k rest else (k2, v) :: drop_key_raw k rest
 
 fun slice_to_iodata : (String, BitString) -> (String, Iodata)
-slice_to_iodata (k, v) = (k, IoBytes v)
+slice_to_iodata (k, v) = (k, raw_bytes v)
 
 impl FromJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJson} {
   from_fields opts pairs = {

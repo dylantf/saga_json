@@ -15,7 +15,7 @@ import SagaJson (
   default_options
 )
 import SagaJson.Codec as C
-import SagaJson.Codec (ToJson, FromJson, IoStr, IoMany, expect, parse_string, parse_int)
+import SagaJson.Codec (ToJson, FromJson, raw, concat, expect, parse_string, parse_int)
 
 # A record with snake_case fields so `rename_all CamelCase` is visible.
 # Hand-written impls stand in for what the codegen will emit: they consult
@@ -29,12 +29,12 @@ impl ToJson for Pt {
   to_json opts p = {
     let kx = apply_name_style opts.rename_all "first_x"
     let ky = apply_name_style opts.rename_all "second_y"
-    IoMany [
-      IoStr ("{\"" <> kx <> "\":"),
+    concat [
+      raw ("{\"" <> kx <> "\":"),
       to_json opts p.first_x,
-      IoStr (",\"" <> ky <> "\":"),
+      raw (",\"" <> ky <> "\":"),
       to_json opts p.second_y,
-      IoStr "}",
+      raw "}",
     ]
   }
 }
