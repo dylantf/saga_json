@@ -7,6 +7,7 @@ module SagaJson.Encode
 
 import Std.Base (Show, Debug)
 import Std.Fail (Fail)
+import Std.BitString as BS
 import Std.List
 import Std.String
 import SagaJson (
@@ -57,25 +58,79 @@ pair_to_value (k, v) = (k, to_value v)
 #@ Render a `Json` value as a compact JSON string (no whitespace).
 #@ Output round-trips through `SagaJson.parse_string`.
 pub fun render : Json -> String
-render j = render_value (to_value j)
+render j =
+  BS.to_string_unchecked (BS.concat (List.reverse (render_acc (to_value j) [])))
 
-fun render_value : Value -> String
-render_value v = case v {
-  VNull -> "null"
-  VBool True -> "true"
-  VBool False -> "false"
-  VInt n -> show n
-  VFloat f -> show f
-  VString s -> render_string s
-  VArray items -> "[" <> String.join "," (List.map render_value items) <> "]"
-  VObject pairs -> "{" <> String.join "," (List.map render_pair pairs) <> "}"
+# Accumulate the rendered bytes as a reversed list of BitString fragments,
+# flattened once by `render` via `BS.concat` (iolist_to_binary). This keeps
+# rendering O(total length): nested `<>` / `String.join` would re-copy every
+# enclosing object/array at each level.
+fun render_acc : Value -> List BitString -> List BitString
+render_acc v acc = case v {
+  VNull -> lit_null :: acc
+  VBool True -> lit_true :: acc
+  VBool False -> lit_false :: acc
+  VInt n -> BS.from_string (show n) :: acc
+  VFloat f -> BS.from_string (show f) :: acc
+  VString s -> render_string s :: acc
+  VArray items -> {
+    let acc1 = render_items items True (lit_lbracket :: acc)
+    lit_rbracket :: acc1
+  }
+  VObject pairs -> {
+    let acc1 = render_pairs pairs True (lit_lbrace :: acc)
+    lit_rbrace :: acc1
+  }
 }
 
-fun render_pair : (String, Value) -> String
-render_pair (k, v) = render_string k <> ":" <> render_value v
+fun render_items : List Value -> Bool -> List BitString -> List BitString
+render_items items first acc = case items {
+  [] -> acc
+  v :: rest -> {
+    let acc1 = if first then acc else lit_comma :: acc
+    render_items rest False (render_acc v acc1)
+  }
+}
 
-fun render_string : String -> String
-render_string s = Escape.escape_string s
+fun render_pairs : List (String, Value) -> Bool -> List BitString -> List BitString
+render_pairs pairs first acc = case pairs {
+  [] -> acc
+  (k, v) :: rest -> {
+    let acc1 = if first then acc else lit_comma :: acc
+    let acc2 = lit_colon :: (render_string k :: acc1)
+    render_pairs rest False (render_acc v acc2)
+  }
+}
+
+fun render_string : String -> BitString
+render_string s = BS.from_string (Escape.escape_string s)
+
+fun lit_null : BitString
+lit_null = BS.from_string "null"
+
+fun lit_true : BitString
+lit_true = BS.from_string "true"
+
+fun lit_false : BitString
+lit_false = BS.from_string "false"
+
+fun lit_lbrace : BitString
+lit_lbrace = BS.from_byte 123
+
+fun lit_rbrace : BitString
+lit_rbrace = BS.from_byte 125
+
+fun lit_lbracket : BitString
+lit_lbracket = BS.from_byte 91
+
+fun lit_rbracket : BitString
+lit_rbracket = BS.from_byte 93
+
+fun lit_comma : BitString
+lit_comma = BS.from_byte 44
+
+fun lit_colon : BitString
+lit_colon = BS.from_byte 58
 
 # --- Post-process combinators ---
 #
