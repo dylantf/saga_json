@@ -9,7 +9,7 @@
     {
       "slug": "encoding",
       "title": "Encoding",
-      "description": "Hand-written impls, deriving (ToJson), serialize, derive_with.",
+      "description": "Hand-written impls with the object/array builders, deriving (ToJson), serialize.",
       "group": "guide"
     },
     {
@@ -21,7 +21,7 @@
     {
       "slug": "customization",
       "title": "Customization",
-      "description": "Options, ADT tag formats, key renaming, the fluent Encoder/Decoder builder, and the as_enum/as_tagged strategies.",
+      "description": "Options, the JsonOptions effect, ADT tag formats, key renaming, and the as_enum/as_tagged strategies.",
       "group": "guide"
     },
     {

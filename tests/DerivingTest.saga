@@ -17,7 +17,9 @@ import SagaJson as J (
   Untagged,
   JsonOptions
 )
-import SagaJson.Encode as E (
+import SagaJson.Encode as E (render, object, string, int)
+import SagaJson.Codec as C
+import SagaJson.Codec (
   ToJson,
   serialize,
   serialize_with,
@@ -315,31 +317,27 @@ tests () = {
 
     describe "as_enum / as_tagged strategies" (fun () -> {
       test "as_enum emits bare string for unit variant" (fun () ->
-        assert_eq (E.render (as_enum NoOp with J.json_defaults)) "\"NoOp\"")
+        assert_eq (C.to_string (as_enum default_options NoOp)) "\"NoOp\"")
 
       test "as_enum drops payload on single-arg variant" (fun () ->
-        assert_eq (E.render (as_enum (Bare 9) with J.json_defaults)) "\"Bare\"")
+        assert_eq (C.to_string (as_enum default_options (Bare 9))) "\"Bare\"")
 
       test "as_enum drops record payload on single-arg variant" (fun () ->
-        assert_eq (E.render (as_enum (WrapIt (Payload { x: 1, y: 2 }))
-          with J.json_defaults)) "\"WrapIt\"")
+        assert_eq (C.to_string (as_enum default_options
+          (WrapIt (Payload { x: 1, y: 2 })))) "\"WrapIt\"")
 
       test "as_enum honors rename_all (already-bare unit variant)" (fun () -> {
         let opts = { default_options | rename_all: ScreamingSnakeCase }
-        let got =
-          E.render (as_enum NoOp with {
-            get_json_options () = resume opts
-          })
-        assert_eq got "\"NOOP\""
+        assert_eq (C.to_string (as_enum opts NoOp)) "\"NOOP\""
       })
 
       test "as_tagged emits wrapped form on unit variant" (fun () ->
-        assert_eq (E.render (as_tagged NoOp
-          with J.json_defaults)) "{\"NoOp\":null}")
+        assert_eq (C.to_string (as_tagged default_options NoOp))
+          "{\"NoOp\":null}")
 
       test "as_tagged leaves payload-bearing variants alone" (fun () ->
-        assert_eq (E.render (as_tagged (Bare 9)
-          with J.json_defaults)) "{\"Bare\":9}")
+        assert_eq (C.to_string (as_tagged default_options (Bare 9)))
+          "{\"Bare\":9}")
     })
 
     describe "byte-for-byte match with hand-written" (fun () -> {

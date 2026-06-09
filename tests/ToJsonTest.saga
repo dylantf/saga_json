@@ -2,7 +2,8 @@ module ToJsonTest
 
 import Std.Test (Testing, Test, describe, test, assert_eq)
 import SagaJson as J (default_options, CamelCase)
-import SagaJson.Encode as E (ToJson, serialize)
+import SagaJson.Codec as C
+import SagaJson.Codec (ToJson, serialize)
 
 # A small record + ADT-shaped wrapper to exercise hand-written impls without
 # leaning on Main's types (tests should stay independent of bin code).
@@ -12,8 +13,11 @@ record Point {
   y: Int,
 }
 
-impl ToJson for Point needs {J.JsonOptions} {
-  to_json p = E.object [("x", to_json p.x), ("y", to_json p.y)]
+impl ToJson for Point {
+  to_json opts p = C.object [
+    ("x", to_json opts p.x),
+    ("y", to_json opts p.y),
+  ]
 }
 
 record Polyline {
@@ -31,14 +35,13 @@ record DerivedRow {
   detail: Maybe String,
 } deriving (Debug, ToJson)
 
-impl ToJson for Polyline needs {J.JsonOptions} {
-  to_json pl =
-    E.object [
-      ("name", to_json pl.name),
-      ("closed", to_json pl.closed),
-      ("pts", to_json pl.pts),
-      ("label", to_json pl.label),
-    ]
+impl ToJson for Polyline {
+  to_json opts pl = C.object [
+    ("name", to_json opts pl.name),
+    ("closed", to_json opts pl.closed),
+    ("pts", to_json opts pl.pts),
+    ("label", to_json opts pl.label),
+  ]
 }
 
 pub fun tests : Unit -> Unit needs {Testing}

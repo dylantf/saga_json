@@ -4,8 +4,8 @@ A JSON library for [Saga](https://saga-lang.org). Parse, render,
 encode, decode, transform. Hand-written or derived.
 
 ```saga
-import SagaJson.Encode as E (ToJson, serialize)
-import SagaJson.Decode as D (FromJson, deserialize)
+import SagaJson as J
+import SagaJson.Codec (ToJson, FromJson, serialize, deserialize)
 
 record User {
   name: String,
@@ -25,8 +25,10 @@ main () = {
 ## What you get
 
 - Three layers. Drop in at whichever fits:
-  - `Json` AST plus `render` and `parse_string` for hand-rolled work.
-  - `ToJson` and `FromJson` traits for per-type impls.
+  - `Json` value AST (`SagaJson.Encode`/`SagaJson.Decode`) plus
+    `render` and `parse_string` for hand-rolled work.
+  - `ToJson` and `FromJson` traits (`SagaJson.Codec`) for per-type
+    impls.
   - `serialize` and `deserialize` one-shot helpers on top.
 - Deriving. `deriving (ToJson, FromJson)` on records and ADTs. No
   per-field boilerplate.
@@ -35,9 +37,8 @@ main () = {
   (externally, adjacently, or internally tagged; untagged), and
   null-field omission.
 - Escape hatches. `as_enum` and `as_tagged` strategy functions when
-  the defaults are wrong. `derive_with` to start from the derived
-  shape and post-process. `update_field`, `rename_field`, and
-  `map_object` for reshaping `Json` after the fact.
+  the defaults are wrong. `update_field`, `rename_field`, and
+  `map_object` for reshaping `Json` on the value path.
 - Tuples (arity 2 through 10), `List`, `Maybe`, and the primitive
   types out of the box.
 - Effect-typed errors. Decoders are `Json -> a needs {Fail Error}`,
@@ -70,19 +71,14 @@ saga_json = { git = "https://github.com/dylantf/saga_json" }
 
 ## Examples
 
-`src/` contains six self-contained demos, each exercising one
-encode/decode path:
-
 | Path                                                       | What it shows                                                          |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
-| [src/DecodeHand.saga](src/DecodeHand.saga)                 | Decoding by hand: `field`, `string`, `int`, `at`                       |
-| [src/DecodeDerive.saga](src/DecodeDerive.saga)             | `deriving (FromJson)` plus `deserialize`                               |
-| [src/DecodeDeriveCustom.saga](src/DecodeDeriveCustom.saga) | Derived decoder plus `Options` for renaming and tag format             |
-| [src/EncodeHand.saga](src/EncodeHand.saga)                 | Hand-written `impl ToJson` using the primitive constructors            |
-| [src/EncodeDerive.saga](src/EncodeDerive.saga)             | `deriving (ToJson)` plus `serialize`, including tuples                 |
-| [src/EncodeDeriveCustom.saga](src/EncodeDeriveCustom.saga) | Derived encoder plus `Options` and the `as_enum`/`as_tagged` strategies |
+| [src/EncodeDeriveCustom.saga](src/EncodeDeriveCustom.saga) | Derived encoder plus the `JsonOptions` effect and the `as_enum`/`as_tagged` strategies |
 
-Run all demos with `saga run`. Run tests with `saga test`.
+The broadest coverage of every path — hand-written and derived,
+encode and decode, all `Options` knobs — lives in the test suite under
+[tests/](tests/). Run the demo with `saga run`; run the tests with
+`saga test`.
 
 ## Status
 

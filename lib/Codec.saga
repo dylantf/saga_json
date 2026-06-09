@@ -89,23 +89,23 @@ intersperse_commas opts xs = case xs {
 # Tuples encode to positional JSON arrays (arity 2..10).
 impl ToJson for (a, b) where {a: ToJson, b: ToJson} {
   to_json opts t = { let (x1, x2) = t
-    array_io [to_json opts x1, to_json opts x2] }
+    array [to_json opts x1, to_json opts x2] }
 }
 
 impl ToJson for (a, b, c) where {a: ToJson, b: ToJson, c: ToJson} {
   to_json opts t = { let (x1, x2, x3) = t
-    array_io [to_json opts x1, to_json opts x2, to_json opts x3] }
+    array [to_json opts x1, to_json opts x2, to_json opts x3] }
 }
 
 impl ToJson for (a, b, c, d) where {a: ToJson, b: ToJson, c: ToJson, d: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4) = t
-    array_io [to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4] }
+    array [to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4] }
 }
 
 impl ToJson for (a, b, c, d, e)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5,
     ] }
@@ -114,7 +114,7 @@ impl ToJson for (a, b, c, d, e)
 impl ToJson for (a, b, c, d, e, f)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5, x6) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5, to_json opts x6,
     ] }
@@ -124,7 +124,7 @@ impl ToJson for (a, b, c, d, e, f, g)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
     g: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5, to_json opts x6, to_json opts x7,
     ] }
@@ -134,7 +134,7 @@ impl ToJson for (a, b, c, d, e, f, g, h)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
     g: ToJson, h: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
     ] }
@@ -144,7 +144,7 @@ impl ToJson for (a, b, c, d, e, f, g, h, i)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
     g: ToJson, h: ToJson, i: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8, x9) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
       to_json opts x9,
@@ -155,7 +155,7 @@ impl ToJson for (a, b, c, d, e, f, g, h, i, j)
   where {a: ToJson, b: ToJson, c: ToJson, d: ToJson, e: ToJson, f: ToJson,
     g: ToJson, h: ToJson, i: ToJson, j: ToJson} {
   to_json opts t = { let (x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t
-    array_io [
+    array [
       to_json opts x1, to_json opts x2, to_json opts x3, to_json opts x4,
       to_json opts x5, to_json opts x6, to_json opts x7, to_json opts x8,
       to_json opts x9, to_json opts x10,
@@ -198,7 +198,7 @@ impl ToJson for Record a where {a: ToJsonFields} {
     let fields = to_fields opts inner
     let kept =
       if opts.omit_nothings then List.filter not_null_field fields else fields
-    object_io kept
+    object kept
   }
 }
 
@@ -214,9 +214,9 @@ impl ToJson for Variant (n : Symbol) a where {n: KnownSymbol, a: VariantPayload}
       ExternallyTagged ->
         if opts.unit_variants_as_strings && is_unit_payload payload then
           escape_io name
-        else object_io [(name, p)]
+        else object [(name, p)]
       AdjacentlyTagged ->
-        object_io [(opts.tag_field, escape_io name), (opts.content_field, p)]
+        object [(opts.tag_field, escape_io name), (opts.content_field, p)]
       Untagged -> p
       InternallyTagged -> tag_internally opts.tag_field name p
     }
@@ -234,8 +234,8 @@ fun tag_internally : String -> String -> Iodata -> Iodata
 tag_internally tag_field name payload = case parse_value (to_bytes payload) {
   Ok (VObject pairs, _) ->
     render_value (VObject ((tag_field, VString name) :: pairs))
-  Ok (VNull, _) -> object_io [(tag_field, escape_io name)]
-  _ -> object_io [(name, payload)]
+  Ok (VNull, _) -> object [(tag_field, escape_io name)]
+  _ -> object [(name, payload)]
 }
 
 impl ToJsonFields for Labeled (n : Symbol) a where {n: KnownSymbol, a: ToJson} {
@@ -269,15 +269,25 @@ impl VariantPayload for Leaf a where {a: ToJson} {
 
 impl VariantPayload for And l r where {l: ToJsonArgs, r: ToJsonArgs} {
   payload_io opts v = case v {
-    And l r -> array_io (List.append (to_args opts l) (to_args opts r))
+    And l r -> array (List.append (to_args opts l) (to_args opts r))
   }
   is_unit_payload _ = False
 }
 
-# Assemble an object `{"k":v,...}` / array `[v,...]` as Iodata. Keys are
-# escaped; values are already-rendered Iodata.
-fun object_io : List (String, Iodata) -> Iodata
-object_io fields = IoMany (IoStr "{" :: obj_body fields)
+#@ Assemble a JSON object from `(key, Iodata)` pairs, for hand-written
+#@ `ToJson` impls. Keys are escaped; values are already-rendered `Iodata`,
+#@ so produce them by recursing through `to_json opts field` — that both
+#@ threads the ambient `Options` and lets the fused fast path apply.
+#@ Key order is preserved.
+#@
+#@   impl ToJson for Point {
+#@     to_json opts p = object [
+#@       ("x", to_json opts p.x),
+#@       ("y", to_json opts p.y),
+#@     ]
+#@   }
+pub fun object : List (String, Iodata) -> Iodata
+object fields = IoMany (IoStr "{" :: obj_body fields)
 
 fun obj_body : List (String, Iodata) -> List Iodata
 obj_body fields = case fields {
@@ -289,8 +299,15 @@ obj_body fields = case fields {
 fun field_io : String -> Iodata -> Iodata
 field_io k v = IoMany [escape_io k, IoStr ":", v]
 
-fun array_io : List Iodata -> Iodata
-array_io xs = IoMany (IoStr "[" :: arr_body xs)
+#@ Assemble a JSON array from a list of already-rendered `Iodata`
+#@ elements, for hand-written `ToJson` impls. Produce elements with
+#@ `to_json opts x` so options thread through and the fused path applies.
+#@
+#@   impl ToJson for Pair {
+#@     to_json opts p = array [to_json opts p.fst, to_json opts p.snd]
+#@   }
+pub fun array : List Iodata -> Iodata
+array xs = IoMany (IoStr "[" :: arr_body xs)
 
 fun arr_body : List Iodata -> List Iodata
 arr_body xs = case xs {
@@ -384,8 +401,8 @@ render_value v = case v {
   VInt n -> IoStr (show n)
   VFloat f -> IoStr (show f)
   VString s -> escape_io s
-  VArray items -> array_io (List.map render_value items)
-  VObject pairs -> object_io (List.map render_value_pair pairs)
+  VArray items -> array (List.map render_value items)
+  VObject pairs -> object (List.map render_value_pair pairs)
 }
 
 fun render_value_pair : (String, Value) -> (String, Iodata)
@@ -846,7 +863,7 @@ decode_variant_internal opts expected bs = case parse_object_raw bs {
               Err e -> Err e
             }
             _ -> {
-              let body = to_bytes (object_io (List.map slice_to_iodata remaining))
+              let body = to_bytes (object (List.map slice_to_iodata remaining))
               case decode_payload opts body {
                 Ok v -> Ok (v, rest)
                 Err e -> Err e

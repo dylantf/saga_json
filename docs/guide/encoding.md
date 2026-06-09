@@ -1,7 +1,13 @@
 # Encoding
 
 How to turn Saga values into JSON. Three options, from least to most
-control: derive it, write the impl, or build the `Json` AST directly.
+control: derive it, write the impl, or build a `Json` value directly.
+
+The canonical encoder lives in `SagaJson.Codec`: the `ToJson` trait,
+`serialize`/`serialize_with`, and the `object`/`array` builders. The
+`SagaJson.Encode` module is the separate, flexible *value* API — `Json`
+constructors and transforms — covered under "Building a Json value"
+below.
 
 ## The shortest path: deriving
 
@@ -9,7 +15,7 @@ For records and ADTs whose JSON shape matches the type definition,
 `deriving (ToJson)` synthesizes the impl:
 
 ```saga
-import SagaJson.Encode as E (ToJson, serialize)
+import SagaJson.Codec (ToJson, serialize)
 
 record Person {
   name: String,
@@ -20,10 +26,8 @@ serialize (Person { name: "Alice", age: 30 })
 # "{"name":"Alice","age":30}"
 ```
 
-`serialize` is the one-shot helper: it calls `to_json` on the value
-and renders the result to a compact string. If you want the
-intermediate `Json` value, call `E.to_json` directly and render
-later.
+`serialize` is the one-shot helper: it encodes the value to compact
+`Iodata` and flattens it to a `String`.
 
 Nesting composes. Any record whose fields all have `ToJson` impls can
 itself derive `ToJson`:
@@ -54,45 +58,54 @@ These types have `ToJson` impls in the library:
 ## Hand-written impls
 
 When the JSON shape doesn't match the type definition, write the impl
-by hand. You only need to implement `to_json_with`; the trait's
-default body for `to_json` calls it with `default_options`.
+by hand. `to_json` takes the ambient `Options` and the value, and
+returns `Iodata`. Assemble it with the `object` and `array` builders
+rather than writing braces by hand:
 
 ```saga
-record Person {
-  name: String,
-  age: Int,
+import SagaJson.Codec as C (ToJson, object, array)
+
+record Point {
+  x: Int,
+  y: Int,
 }
 
-impl ToJson for Person {
-  to_json_with _ p = E.object [
-    ("name", to_json p.name),
-    ("age", to_json p.age),
+impl ToJson for Point {
+  to_json opts p = C.object [
+    ("x", to_json opts p.x),
+    ("y", to_json opts p.y),
   ]
 }
 ```
 
-`E.object` takes a list of `(String, Json)` pairs and preserves key
-order. The `_` ignores the `Options` argument because this impl
-hard-codes the shape. If you want `Options` to drive renaming or
-similar, pass it through and call `to_json_with opts p.name` instead
-of `to_json p.name`.
+- `object` takes `(String, Iodata)` pairs and preserves key order.
+- `array` takes a list of `Iodata` elements.
+- Produce each value by recursing through `to_json opts field`. That
+  threads the ambient `Options` (so `rename_all`, tag formats, etc.
+  reach nested values) and keeps the value on the fused fast path.
 
-## Primitive constructors
+The `opts` argument is threaded, not consumed: pass it down to every
+nested `to_json`. If your impl hard-codes a shape that should ignore
+options, you can name the argument `_`, but then nested renaming won't
+apply.
 
-When deriving doesn't fit and you want raw control, build `Json`
-values directly:
+## Building a Json value directly
 
-| Function | Input              | Output                   |
-| -------- | ------------------ | ------------------------ |
-| `string` | `String`           | JSON string              |
-| `int`    | `Int`              | JSON number              |
-| `float`  | `Float`            | JSON number              |
-| `bool`   | `Bool`             | JSON `true` or `false`   |
-| `null`   | (value, not a fn)  | JSON `null`              |
-| `array`  | `List Json`        | JSON array               |
-| `object` | `List (String, Json)` | JSON object           |
+When the shape is dynamic — driven by runtime data rather than a fixed
+type — build a `Json` value with the constructors in `SagaJson.Encode`
+and render it. This path goes through the intermediate `Json` AST, so
+it is also the one to use when you want to *transform* the result (see
+the [post-processing guide](post-processing.md)).
 
-Then `render` to serialize:
+| Function | Input                 | Output                 |
+| -------- | --------------------- | ---------------------- |
+| `string` | `String`              | JSON string            |
+| `int`    | `Int`                 | JSON number            |
+| `float`  | `Float`               | JSON number            |
+| `bool`   | `Bool`                | JSON `true` or `false` |
+| `null`   | (value, not a fn)     | JSON `null`            |
+| `array`  | `List Json`           | JSON array             |
+| `object` | `List (String, Json)` | JSON object            |
 
 ```saga
 import SagaJson.Encode as E
@@ -105,6 +118,11 @@ let j = E.object [
 E.render j
 # "{"name":"Alice","tags":["admin","owner"],"age":30}"
 ```
+
+Note the two `object`/`array`: `E.object` builds a `Json` value and is
+rendered with `E.render`; `C.object` (above) builds `Iodata` directly
+inside a `ToJson` impl. Pick the value path for dynamic data and
+transforms, the `Codec` builders for hand-written trait impls.
 
 ## ADTs
 
@@ -143,60 +161,42 @@ If you want every variant uniformly tagged, or every variant as a
 bare string, see [`as_enum` and `as_tagged`](customization.md) in the
 customization guide.
 
-## `derive_with`: extend the derived shape
+## `serialize_with`: customize via the `JsonOptions` effect
 
-When you want most of the derived encoding but with one tweak, write
-a hand impl that calls back into the derived encoder via
-`derive_with`, then post-processes the `Json`:
-
-```saga
-record User {
-  id: Int,
-  name: String,
-} deriving (ToJson)
-
-impl ToJson for User {
-  to_json_with opts u =
-    derive_with opts u
-    |> E.rename_field "id" "userId"
-}
-```
-
-Without `derive_with`, the hand impl shadows the derived one, so the
-trait dispatch can't reach it. `derive_with` is the explicit handle
-back to the derived shape.
-
-See the [post-processing guide](post-processing.md) for the full set
-of `Json` transformers.
-
-## `serialize_with`: pass `Options` at the call site
-
-`serialize` uses `default_options`. To override, use `serialize_with`:
+`serialize` uses `default_options`. To override, install a
+`JsonOptions` handler at the call boundary and use `serialize_with`,
+which reads the ambient options once and threads them down:
 
 ```saga
-let opts = { default_options | rename_all: CamelCase }
-serialize_with opts (User { first_name: "Ada", last_name: "Lovelace" })
+import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson.Codec (serialize_with)
+
+let camel = json_opts (rename_keys CamelCase)
+{
+  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
+} with camel
 # "{"firstName":"Ada","lastName":"Lovelace"}"
 ```
 
-For multi-option setups, the fluent builder reads more naturally:
+One `with` covers any number of nested serializations under the same
+policy. Setters compose with `>>`:
 
 ```saga
-User { first_name: "Ada", last_name: "Lovelace" }
-|> encoder
-|> rename_keys CamelCase
-|> serialize
+let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
+{
+  serialize_with user
+  serialize_with notification
+} with api_shape
 ```
 
-See the [customization guide](customization.md) for both APIs and the
-full set of `Options` fields.
+See the [customization guide](customization.md) for the full set of
+`Options` fields and tag formats.
 
 ## Choosing a layer
 
 - Use `deriving` when the JSON shape matches the type.
-- Use a hand impl when the shape is fixed but different from the
-  type, or when you want to compute fields.
-- Use `derive_with` when you want the derived shape with one or two
-  edits.
-- Use the `Json` primitives when the shape is dynamic (driven by
-  runtime data) or you need full control.
+- Use a hand impl (with `C.object`/`C.array`) when the shape is fixed
+  but different from the type, or when you want to compute fields.
+- Use the `SagaJson.Encode` `Json` constructors when the shape is
+  dynamic (driven by runtime data) or you need to transform the
+  result before rendering.

@@ -19,18 +19,16 @@ import SagaJson as J (
   CamelCase,
   JsonOptions
 )
-import SagaJson.Decode as D (
-  FromJson,
-  deserialize,
-  deserialize_with,
-  refine,
-  as_enum_from,
-  as_tagged_from
-)
-import SagaJson.Encode as E (
+import Std.BitString as BS
+import SagaJson.Decode as D (refine, field, string, int)
+import SagaJson.Codec as C
+import SagaJson.Codec (
   ToJson,
+  FromJson,
   serialize,
   serialize_with,
+  deserialize,
+  deserialize_with,
   as_enum,
   as_tagged
 )
@@ -105,6 +103,26 @@ sample_user () = User {
     coords: Coords { lat: 40.7128, lng: -74.006 },
   },
   tags: [],
+}
+
+# Combinator decoder for Person (the Value-trait `from_json : Json -> a` is
+# gone; hand-written Json decoders use the surviving combinators).
+fun person_dec : J.Json -> Person needs {Fail J.Error}
+person_dec jj = Person {
+  name: string (field "name" jj),
+  age: int (field "age" jj),
+}
+
+fun enum_from_role : Options -> String -> Result Role J.Error
+enum_from_role opts s = case C.as_enum_from opts (BS.from_string s) {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
+}
+
+fun tagged_from_role : Options -> String -> Result Role J.Error
+tagged_from_role opts s = case C.as_tagged_from opts (BS.from_string s) {
+  Ok (v, _) -> Ok v
+  Err e -> Err e
 }
 
 # Invariant for refine: age must be non-negative.
@@ -275,44 +293,28 @@ tests () = {
     })
 
     describe "as_enum / as_tagged strategies" (fun () -> {
-      test "as_enum_from decodes bare string" (fun () -> {
-        let got =
-          J.parse (fun jj ->
-            (as_enum_from jj : Role) with J.json_defaults) "\"Editor\""
-        assert_eq got (Ok Editor)
-      })
+      test "as_enum_from decodes bare string" (fun () ->
+        assert_eq (enum_from_role default_options "\"Editor\"") (Ok Editor))
 
-      test "as_enum_from also accepts wrapped form for unit variants" (fun () -> {
-        let got =
-          J.parse (fun jj ->
-            (as_enum_from jj : Role) with J.json_defaults) "{\"Editor\":null}"
-        assert_eq got (Ok Editor)
-      })
+      test "as_enum_from also accepts wrapped form for unit variants" (fun () ->
+        assert_eq (enum_from_role default_options "{\"Editor\":null}")
+          (Ok Editor))
 
       test "as_enum_from applies rename_all" (fun () -> {
         let opts = { default_options | rename_all: ScreamingSnakeCase }
-        let got =
-          J.parse (fun jj -> (as_enum_from jj : Role) with {
-            get_json_options () = resume opts
-          }) "\"ADMIN\""
-        assert_eq got (Ok Admin)
+        assert_eq (enum_from_role opts "\"ADMIN\"") (Ok Admin)
       })
 
       test "as_tagged round-trip preserves wrapped shape for unit variants" (fun () -> {
-        let enc = E.render (as_tagged Admin with J.json_defaults)
+        let enc = C.to_string (as_tagged default_options Admin)
         assert_eq enc "{\"Admin\":null}"
-        let got =
-          J.parse (fun jj ->
-            (as_tagged_from jj : Role) with J.json_defaults) enc
-        assert_eq got (Ok Admin)
+        assert_eq (tagged_from_role default_options enc) (Ok Admin)
       })
 
       test "as_enum / as_enum_from round-trip" (fun () -> {
-        let enc = E.render (as_enum Editor with J.json_defaults)
+        let enc = C.to_string (as_enum default_options Editor)
         assert_eq enc "\"Editor\""
-        let got =
-          J.parse (fun jj -> (as_enum_from jj : Role) with J.json_defaults) enc
-        assert_eq got (Ok Editor)
+        assert_eq (enum_from_role default_options enc) (Ok Editor)
       })
     })
 
@@ -376,14 +378,14 @@ tests () = {
     describe "refine" (fun () -> {
       test "accepts value matching invariant" (fun () -> {
         let dec =
-          refine nonneg_age (fun jj -> from_json jj with J.json_defaults)
+          refine nonneg_age person_dec
         let got = J.parse dec "{\"name\":\"Ada\",\"age\":30}"
         assert_eq got (Ok (Person { name: "Ada", age: 30 }))
       })
 
       test "rejects value violating invariant" (fun () -> {
         let dec =
-          refine nonneg_age (fun jj -> from_json jj with J.json_defaults)
+          refine nonneg_age person_dec
         let got = J.parse dec "{\"name\":\"Ada\",\"age\":-1}"
         case got {
           Err (J.InvalidShape "age >= 0" "negative" _) -> assert! True ""

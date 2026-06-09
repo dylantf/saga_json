@@ -3,7 +3,8 @@ title: SagaJson
 ---
 
 JSON library top-level: the `Json` opaque type, the shared `Error` type,
-and the decoder-running entry points.
+the `Options` record and its `JsonOptions` effect, and the decoder-running
+entry points.
 
 For encoding, see `SagaJson.Encode`. For decoding primitives and
 combinators, see `SagaJson.Decode`.
@@ -26,6 +27,7 @@ Construct with `SagaJson.Encode` primitives; inspect with
 type Error =
   | InvalidJson String
   | InvalidShape (expected: String) (found: String) (path: List String)
+  deriving (Eq, Debug)
 ```
 
 Error returned when JSON parsing or decoding fails.
@@ -60,16 +62,16 @@ type TagFormat =
 How sum-type variants are tagged in JSON.
 
 - `ExternallyTagged` (default): `{"Variant": payload}` for variants
-  that carry a payload; unit variants emit as bare strings
-  (`"Admin"`) when `unit_variants_as_strings` is True (the default).
+that carry a payload; unit variants emit as bare strings
+(`"Admin"`) when `unit_variants_as_strings` is True (the default).
 - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
-  both fields always emitted, including for unit (U1) variants where
-  `content_field` carries `null`.
+both fields always emitted, including for unit (U1) variants where
+`content_field` carries `null`.
 - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
-  Only well-defined when the payload renders to a JSON object (single
-  record-valued variants) or `null` (unit variants). For primitive /
-  array payloads the encoder falls back to `ExternallyTagged` — same
-  restriction as serde.
+Only well-defined when the payload renders to a JSON object (single
+record-valued variants) or `null` (unit variants). For primitive /
+array payloads the encoder falls back to `ExternallyTagged` — same
+restriction as serde.
 - `Untagged`: emit the payload directly; variant identity is lost.
 
 ### Options
@@ -77,7 +79,7 @@ How sum-type variants are tagged in JSON.
 ```saga
 record Options {
   rename_all: NameStyle,
-  omit_nothing: Bool,
+  omit_nothings: Bool,
   tag_format: TagFormat,
   tag_field: String,
   content_field: String,
@@ -87,38 +89,35 @@ record Options {
 
 Uniform codec options. Shared between encode and decode so a single
 `Options` value drives a symmetric round-trip. Construct with
-record-update syntax: `{ default_options | rename_all: CamelCase }`.
-Note: `omit_nothing` is encode-only (no-op on decode).
+record-update syntax: `{ default_options | rename_all: CamelCase }`,
+or chain the setters: `default_options |> rename_keys CamelCase`.
+Note: `omit_nothings` is encode-only (no-op on decode).
 
-## Traits
+## Effects
 
-### WithOptions
+### JsonOptions
 
 ```saga
-trait WithOptions a {
-  fun map_options : Options -> Options -> a -> a
+effect JsonOptions {
+  fun get_json_options : Unit -> Options
 }
 ```
 
-Types that carry an `Options` value internally and let you adjust it
-functionally. Implemented by `SagaJson.Encode.Encoder` and
-`SagaJson.Decode.Decoder`. The free-function setters
-(`rename_keys`, `tag_format`, ...) are written against this trait
-so they work on both builders.
+Ambient options for encode and decode. Read with `get_json_options!`
+inside an `impl ToJson` / `impl FromJson` that needs to consult a knob
+(rename_all, omit_nothings, tag_format, ...). Install at the call
+boundary via `json_defaults`, `json_opts`, or `json_opts_from` below.
 
-## Values
+## Handlers
 
-### default_options
+### json_defaults
 
 ```saga
-fun default_options : Options
+handler json_defaults for JsonOptions
 ```
 
-The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
-externally-tagged sums with unit variants emitted as bare strings
-(matching serde, kotlinx.serialization, and most other modern JSON
-libraries). Set `unit_variants_as_strings: False` to recover the
-legacy `{"Admin": null}` shape (or use the `as_tagged` strategy).
+The canonical handler: resumes every `get_json_options!` with
+`default_options`. Use directly: `{ ... } with json_defaults`.
 
 ## Functions
 
@@ -139,51 +138,87 @@ fun to_value : Json -> Value
 Unwrap a `Json` to its underlying `Value`. Library-internal; use
 `SagaJson.Decode` for ordinary decoding.
 
+### default_options
+
+```saga
+fun default_options : Options
+```
+
+The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
+externally-tagged sums with unit variants emitted as bare strings
+(matching serde and most other modern JSON libraries). Set
+`unit_variants_as_strings: False` to recover the legacy
+`{"Admin": null}` shape (or use the `as_tagged` strategy).
+
+### json_opts
+
+```saga
+fun json_opts : Options -> Options -> Handler JsonOptions
+```
+
+Build a handler that resumes `get_json_options!` with
+`f default_options`. The common entry point for setting up an
+options policy at a request boundary:
+
+{ ... } with json_opts (rename_keys CamelCase >> omit_nothings)
+
+### json_opts_from
+
+```saga
+fun json_opts_from : Options -> Options -> Options -> Handler JsonOptions
+```
+
+Build a handler from a custom base rather than `default_options`.
+Use when you already have a named `Options` value (e.g. a
+per-environment configuration) you want to build on top of:
+
+{ ... } with json_opts_from production_opts (rename_keys CamelCase)
+
 ### rename_keys
 
 ```saga
-fun rename_keys : NameStyle -> a -> a where {a: WithOptions}
+fun rename_keys : NameStyle -> Options -> Options
 ```
 
-Set the `rename_all` field on the builder's Options.
+Set the `rename_all` field.
 
-### omit_nothing
+### omit_nothings
 
 ```saga
-fun omit_nothing : a -> a where {a: WithOptions}
+fun omit_nothings : Options -> Options
 ```
 
-Set `omit_nothing: True` on the builder's Options. Encode-only;
-no-op on the decode side.
+Set `omit_nothings: True`. Encode-only; no-op on the decode side
+(decoders treat a missing field as an error, not as `Nothing`).
 
-### with_tag_format
+### tag_format
 
 ```saga
-fun with_tag_format : TagFormat -> a -> a where {a: WithOptions}
+fun tag_format : TagFormat -> Options -> Options
 ```
 
-Set the `tag_format` field on the builder's Options.
+Set the `tag_format` field.
 
-### with_tag_field
+### tag_field
 
 ```saga
-fun with_tag_field : String -> a -> a where {a: WithOptions}
+fun tag_field : String -> Options -> Options
 ```
 
 Set the `tag_field` name (used by AdjacentlyTagged / InternallyTagged).
 
-### with_content_field
+### content_field
 
 ```saga
-fun with_content_field : String -> a -> a where {a: WithOptions}
+fun content_field : String -> Options -> Options
 ```
 
 Set the `content_field` name (used by AdjacentlyTagged).
 
-### with_unit_variants_as_strings
+### unit_variants_as_strings
 
 ```saga
-fun with_unit_variants_as_strings : Bool -> a -> a where {a: WithOptions}
+fun unit_variants_as_strings : Bool -> Options -> Options
 ```
 
 Set the `unit_variants_as_strings` field. Pass False to recover the
@@ -210,7 +245,7 @@ Parse a JSON string into a Json value, without applying a decoder.
 ### run
 
 ```saga
-fun run : Json -> a needs {Fail Error} -> Json -> Result a Error
+fun run : Json -> a needs {Fail Error, ..e} -> Json -> Result a Error needs {..e}
 ```
 
 Apply a decoder to an already-parsed Json value, returning a Result.
@@ -218,7 +253,8 @@ Apply a decoder to an already-parsed Json value, returning a Result.
 ### parse
 
 ```saga
-fun parse : Json -> a needs {Fail Error} -> String -> Result a Error
+fun parse : Json -> a needs {Fail Error, ..e} -> String -> Result a Error needs {..e}
 ```
 
 Parse a JSON string and apply a decoder in one step.
+

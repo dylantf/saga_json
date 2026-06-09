@@ -17,14 +17,17 @@ Then `saga install` to fetch it.
 
 `saga_json` has three layers. Use whichever fits the task:
 
-1. The `Json` AST. Build values with `string`, `int`, `array`,
-   `object`. Serialize with `render`. Parse with `parse_string`. Use
-   this when the JSON shape doesn't map cleanly to a Saga type.
-2. The `ToJson` and `FromJson` traits. Write an impl by hand or use
-   `deriving`. Composition is automatic: a record whose fields all
-   have impls gets one too.
-3. The `serialize` and `deserialize` one-shot helpers on top of the
-   traits. Typed value to JSON string and back, in a single call.
+1. The `Json` value AST (`SagaJson.Encode` / `SagaJson.Decode`). Build
+   values with `string`, `int`, `array`, `object`; serialize with
+   `render`; parse with `parse_string`; navigate with the decoder
+   combinators. Use this when the JSON shape doesn't map cleanly to a
+   Saga type.
+2. The `ToJson` and `FromJson` traits (`SagaJson.Codec`). Write an
+   impl by hand or use `deriving`. Composition is automatic: a record
+   whose fields all have impls gets one too.
+3. The `serialize` and `deserialize` one-shot helpers (`SagaJson.Codec`)
+   on top of the traits. Typed value to JSON string and back, in a
+   single call.
 
 Most code lives at layer 2 or 3.
 
@@ -33,7 +36,7 @@ Most code lives at layer 2 or 3.
 The shortest encoder is `deriving (ToJson)` plus `serialize`:
 
 ```saga
-import SagaJson.Encode as E (ToJson, serialize)
+import SagaJson.Codec (ToJson, serialize)
 
 record Person {
   name: String,
@@ -46,8 +49,8 @@ main () = {
 }
 ```
 
-`deriving (ToJson)` synthesizes the impl. `serialize` calls `to_json`
-on the value and renders the result to a compact string.
+`deriving (ToJson)` synthesizes the impl. `serialize` encodes the
+value to a compact JSON string in one call.
 
 Lists, `Maybe`, tuples (arity 2 through 10), and the primitive types
 (`String`, `Int`, `Float`, `Bool`) all have impls out of the box.
@@ -59,7 +62,7 @@ The mirror image. Add `FromJson` to the `deriving` clause and call
 
 ```saga
 import SagaJson as J
-import SagaJson.Decode as D (FromJson, deserialize)
+import SagaJson.Codec (FromJson, deserialize)
 
 record Person {
   name: String,
@@ -129,8 +132,8 @@ guide](customization.md).
 
 ## What's next
 
-- [Encoding guide](encoding.md). Hand-written impls, the primitive
-  constructors, and `derive_with`.
+- [Encoding guide](encoding.md). Hand-written impls with the
+  `object`/`array` builders, and the `Json` value constructors.
 - [Decoding guide](decoding.md). Decoder combinators, error shapes,
   navigating nested JSON by hand.
 - [Customization guide](customization.md). `Options`, ADT tag

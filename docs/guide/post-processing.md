@@ -1,14 +1,20 @@
 # Post-processing
 
-A set of combinators that transform a `Json` value after it's been
-built and before it's rendered (or after it's parsed and before it's
-decoded). Useful for reshaping output to match a foreign API, or
-reshaping input to match what `deriving (FromJson)` expects.
+A set of combinators that transform a `Json` value: reshape output to
+match a foreign API, or reshape parsed input to match what a decoder
+expects.
 
 All combinators operate on JSON objects only. Non-object input fails
 with `InvalidShape`. They all live in `SagaJson.Encode`, but they're
-direction-neutral: you can call them on the encode side before
-`render` or on the decode side before passing to a derived decoder.
+direction-neutral: call them on a `Json` you built before `render`, or
+on a `Json` you parsed before running a decoder.
+
+These transforms work on the `Json` *value* path — the
+`SagaJson.Encode` constructors and `SagaJson.Decode` combinators — not
+on the fused `Iodata` produced by a derived `ToJson`. For systematic
+reshaping of derived output (renaming every key, changing tag format)
+reach for [`Options`](customization.md) instead; use these combinators
+for targeted, per-field edits on the value path.
 
 ## The combinators
 
@@ -47,50 +53,58 @@ failure.
 
 ## On the encode side
 
-`derive_with` gives you the derived `Json`, then you transform it
-before `render` picks it up:
+Build the `Json` with the `Encode` constructors, transform it, then
+`render`:
 
 ```saga
-record User {
-  user_id: Int,
-  name: String,
-} deriving (ToJson)
+import SagaJson.Encode as E
 
-impl ToJson for User {
-  to_json_with opts u =
-    derive_with opts u
-    |> E.rename_field "user_id" "id"
-    |> E.insert_field "version" (E.int 2)
-}
+let j = E.object [
+  ("user_id", E.int 1),
+  ("name", E.string "Alice"),
+]
+E.render (
+  j
+  |> E.rename_field "user_id" "id"
+  |> E.insert_field "version" (E.int 2)
+)
+# "{"id":1,"name":"Alice","version":2}"
+```
 
-serialize (User { user_id: 1, name: "Alice" })
-# "{"name":"Alice","id":1,"version":2}"
+If you want to start from a *derived* shape and tweak it, serialize
+the value, parse it back into a `Json`, transform, and re-render:
+
+```saga
+do {
+  Ok j <- J.parse_string (serialize (User { user_id: 1, name: "Alice" }))
+  Ok (E.render (j |> E.rename_field "user_id" "id"))
+} else { Err e -> Err e }
 ```
 
 ## On the decode side
 
-`derive_from_with` accepts a `Json` and runs the derived decoder. You
-can reshape the input first:
+Parse the input to a `Json`, reshape it, then run a combinator
+decoder over the result with `J.run`:
 
 ```saga
-record User {
-  user_id: Int,
-  name: String,
-} deriving (FromJson)
+import SagaJson as J
+import SagaJson.Decode as D
 
-impl FromJson for User {
-  from_json_with opts j =
-    j
-    |> E.rename_field "id" "user_id"  # input uses "id", field is user_id
-    |> derive_from_with opts
+fun user_decoder : Json -> User needs {Fail J.Error}
+user_decoder j = User {
+  user_id: D.at "user_id" D.int j,
+  name: D.at "name" D.string j,
 }
 
-deserialize """{"id":1,"name":"Alice"}""" : Result User J.Error
+do {
+  Ok j <- J.parse_string """{"id":1,"name":"Alice"}"""
+  J.run user_decoder (j |> E.rename_field "id" "user_id")  # input uses "id"
+} else { Err e -> Err e }
 # Ok(User { user_id: 1, name: "Alice" })
 ```
 
 The transform combinators raise `Fail Error`, which composes
-naturally with `from_json_with`'s effect signature.
+naturally with the decoder's effect signature.
 
 ## Nested updates
 
@@ -130,5 +144,5 @@ the same effect type as the other combinators, so it can fail.
   (rename one key, add one computed field, drop one internal
   field).
 
-The two combine cleanly: derive with `Options`, then post-process the
-specific things `Options` can't reach.
+The two combine cleanly: derive or build with `Options`, then
+post-process the specific things `Options` can't reach.

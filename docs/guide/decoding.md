@@ -1,8 +1,13 @@
 # Decoding
 
 How to turn JSON strings into Saga values. Same three options as
-encoding: derive it, write the decoder, or navigate the `Json` AST by
-hand.
+encoding: derive it, write a decoder with the combinators, or navigate
+the `Json` AST by hand.
+
+The canonical decoder lives in `SagaJson.Codec`: the `FromJson` trait
+and `deserialize`/`deserialize_with`. The combinators
+(`field`/`at`/`string`/`int`/`refine`/…) live in `SagaJson.Decode` —
+the flexible value-based decoding API.
 
 ## The shortest path: deriving
 
@@ -11,7 +16,7 @@ For types whose JSON shape matches the definition, `deriving
 
 ```saga
 import SagaJson as J
-import SagaJson.Decode as D (FromJson, deserialize)
+import SagaJson.Codec (FromJson, deserialize)
 
 record Person {
   name: String,
@@ -42,8 +47,9 @@ The same set of types as encoding:
 
 ## Hand-written decoders
 
-A decoder is a function `Json -> a needs {Fail Error}`. You can build
-one with the navigation combinators and call it via `J.parse`:
+When the input shape doesn't match your type, decode with the
+navigation combinators in `SagaJson.Decode`. A decoder is a function
+`Json -> a needs {Fail Error}`; run it via `J.parse`:
 
 ```saga
 import Std.Fail (Fail)
@@ -71,9 +77,16 @@ J.parse person_decoder """{"name":"Alice","age":30,"email":null}"""
 decoder on the value. `J.parse decoder input` parses the string into
 `Json` and runs the decoder, returning `Result a Error`.
 
+This is the path to use when an upstream service emits keys you'd
+rather not name your fields after — just name the field in the
+combinator (`D.at "userId" D.int j`) and store it wherever you like.
+If the difference is a systematic casing convention, prefer the
+`rename_all` option (see `deserialize_with` below) instead of a hand
+decoder.
+
 ## Navigation and primitive decoders
 
-The core decoders that show up in nearly every hand-written impl:
+The core decoders that show up in nearly every hand-written decoder:
 
 | Function   | Decodes                                                       |
 | ---------- | ------------------------------------------------------------- |
@@ -147,49 +160,24 @@ If your input uses a different tag shape, see
 [customization](customization.md) for `AdjacentlyTagged`,
 `InternallyTagged`, and `Untagged`.
 
-## `derive_from_with`: extend the derived decoder
+## `deserialize_with`: customize via the `JsonOptions` effect
 
-When you want most of the derived decoding but with one tweak,
-pre-process the input `Json` and route the result through
-`derive_from_with`:
-
-```saga
-record User {
-  user_id: Int,
-  name: String,
-} deriving (FromJson)
-
-impl FromJson for User {
-  from_json_with opts j =
-    j
-    |> E.rename_field "userId" "user_id"  # input uses userId
-    |> derive_from_with opts
-}
-```
-
-Mirror of `derive_with` on the encode side. Useful when an upstream
-service emits keys you'd rather not name your fields after.
-
-## `deserialize_with`: pass `Options` at the call site
-
-`deserialize` uses `default_options`. To override:
+`deserialize` uses `default_options`. To override, install a
+`JsonOptions` handler and use `deserialize_with`, which reads the
+ambient options:
 
 ```saga
-let opts = { default_options | rename_all: CamelCase }
-deserialize_with opts """{"firstName":"Ada"}""" : Result User J.Error
+import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson.Codec (deserialize_with)
+
+{
+  (deserialize_with """{"firstName":"Ada","lastName":"Lovelace"}"""
+    : Result User J.Error)
+} with json_opts (rename_keys CamelCase)
 ```
 
-For multi-option setups, the fluent builder mirrors the encode side:
-
-```saga
-"""{"firstName":"Ada"}"""
-|> decoder
-|> rename_keys CamelCase
-|> decode : Result User J.Error
-```
-
-If the producer used custom `Options`, the consumer needs to match
-them. See the [customization guide](customization.md).
+The consumer's options must match whatever the producer used. See the
+[customization guide](customization.md).
 
 ## `refine`: post-decode validation
 
@@ -202,21 +190,24 @@ nonneg_age u =
   if u.age >= 0 then u
   else fail! (J.InvalidShape "age >= 0" "negative" ["age"])
 
-let strict_user = D.refine nonneg_age D.from_json
+let strict_user = D.refine nonneg_age person_decoder
 J.parse strict_user """{"name":"x","age":-1}"""
 # Err(InvalidShape "age >= 0" "negative" ["age"])
 ```
 
 `refine` runs after the decoder produces a candidate value and either
-returns it unchanged or raises. Same effect type as the rest of
+returns it unchanged or raises. It takes any decoder
+(`Json -> a needs {Fail Error}`), so pair it with a combinator
+decoder like `person_decoder` above. Same effect type as the rest of
 decoding, so failures compose normally.
 
 ## Choosing a layer
 
 - Use `deriving` when the JSON shape matches the type.
-- Use a hand-written decoder when the input shape is fixed but
-  different, or you want to mix in validation.
-- Use `derive_from_with` when you want the derived decoder with one
-  or two pre-processing edits.
+- Use a combinator decoder (`D.at`/`D.string`/`D.field`/…) when the
+  input shape is fixed but different, or you want to mix in
+  validation.
+- Use `deserialize_with` under a `JsonOptions` handler when the only
+  difference is a systematic option like `rename_all` or a tag format.
 - Drop to `D.string` / `D.int` / `D.field` directly when the input
   shape is dynamic or you want fine-grained error messages.

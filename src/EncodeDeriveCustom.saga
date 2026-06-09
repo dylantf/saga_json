@@ -15,9 +15,10 @@ import SagaJson as J (
   tag_field,
   content_field,
   CamelCase,
-  AdjacentlyTagged
+  AdjacentlyTagged,
+  default_options
 )
-import SagaJson.Encode as E (ToJson, serialize_with, as_enum, as_tagged, render)
+import SagaJson.Codec as C (ToJson, serialize_with, as_enum, as_tagged)
 
 record User {
   first_name: String,
@@ -86,16 +87,12 @@ run () = {
   } with api_shape
 
   # as_enum: drop any payload, emit only the variant tag as a bare
-  # string. Lossy by design.
-  {
-    dbg (render (as_enum Heartbeat))
-    dbg (render (as_enum (Login 42)))
-  } with J.json_defaults
+  # string. Lossy by design. These take an explicit Options value.
+  dbg (C.to_string (as_enum default_options Heartbeat))
+  dbg (C.to_string (as_enum default_options (Login 42)))
 
   # as_tagged: force the externally-tagged `{"V": payload}` shape
   # uniformly, including for unit variants.
-  {
-    dbg (render (as_tagged Heartbeat))
-    dbg (render (as_tagged (Login 42)))
-  } with J.json_defaults
+  dbg (C.to_string (as_tagged default_options Heartbeat))
+  dbg (C.to_string (as_tagged default_options (Login 42)))
 }

@@ -8,46 +8,6 @@ Construct `Json` values with the primitive functions (`string`, `int`,
 `array`, `object`, ...). Use `render` to serialize a `Json` value to
 a compact JSON string.
 
-## Types
-
-### Encoder
-
-```saga
-record Encoder a {
-  value: a,
-  options: Options
-}
-```
-
-A typed value paired with the Options that should drive its
-encoding. Build with `encoder` or `encode_with`, refine with the
-`WithOptions` setters, then collapse via `to_json` or `serialize`.
-
-## Traits
-
-### ToJson
-
-```saga
-trait ToJson a {
-  fun to_json_with : Options -> a -> Json
-  fun to_json : a -> Json
-}
-```
-
-Types that can be encoded as JSON. Hand-write `to_json_with` for your
-own records and ADTs (the `to_json` convenience is inherited from the
-trait default), or write `deriving (ToJson)`.
-
-## Values
-
-### null
-
-```saga
-fun null : Json
-```
-
-The JSON `null` value.
-
 ## Functions
 
 ### string
@@ -82,6 +42,14 @@ fun bool : Bool -> Json
 
 Encode a `Bool` as JSON `true` / `false`.
 
+### null
+
+```saga
+fun null : Json
+```
+
+The JSON `null` value.
+
 ### array
 
 ```saga
@@ -107,62 +75,6 @@ fun render : Json -> String
 
 Render a `Json` value as a compact JSON string (no whitespace).
 Output round-trips through `SagaJson.parse_string`.
-
-### serialize
-
-```saga
-fun serialize : a -> String where {a: ToJson}
-```
-
-Encode a value to a compact JSON string using default options.
-Equivalent to `render (to_json x)`.
-
-### serialize_with
-
-```saga
-fun serialize_with : Options -> a -> String where {a: ToJson}
-```
-
-Encode a value to a compact JSON string using the given options.
-Equivalent to `render (to_json_with opts x)`.
-
-### derive_with
-
-```saga
-fun derive_with : Options -> a -> Json where {a: Generic r, r: ToJson}
-```
-
-Derive-then-tweak escape hatch. Calls the Generic-derived encoding
-explicitly, so a hand-written `impl ToJson` can start from the derived
-shape and post-process. Without this, the trait dispatch can't reach
-the derived impl, since the hand-written impl shadows it.
-
-### as_enum
-
-```saga
-fun as_enum : Options -> a -> Json where {a: ToJson}
-```
-
-Encoding strategy: emit every variant as a bare JSON string of its
-tag name (e.g. `"Admin"`), dropping any payload data. Lossy by
-design — `Elevated 123` encodes to `"Elevated"`, discarding `123`.
-Useful when a downstream system only cares about the tag (logging,
-analytics, JSON shape compatibility with a foreign enum).
-
-The symmetric decoder `SagaJson.Decode.as_enum_from` round-trips
-unit variants but fails on payload-bearing ones — there's no payload
-data in `"Elevated"` to reconstruct from.
-
-### as_tagged
-
-```saga
-fun as_tagged : Options -> a -> Json where {a: ToJson}
-```
-
-Encoding strategy: force the externally-tagged `{"Variant": payload}`
-shape for unit variants too. Recovers the pre-default-refinement
-behavior of `{"Admin": null}`. Drives the encode through
-`unit_variants_as_strings: False` regardless of the caller's Options.
 
 ### update_field
 
@@ -222,20 +134,3 @@ uniform key transformations (e.g. camelCasing every key of a
 dynamic-keyed `Map String _`). Preserves order. The callback may
 itself raise effects.
 
-### encoder
-
-```saga
-fun encoder : a -> Encoder a where {a: ToJson}
-```
-
-Wrap a value with `default_options`. The head of a fluent encode
-chain: `value |> encoder |> rename_keys CamelCase |> serialize`.
-
-### encode_with
-
-```saga
-fun encode_with : a -> Options -> Encoder a where {a: ToJson}
-```
-
-Wrap a value with a pre-built Options record. The shortcut when
-you already have an Options value you want to reuse.

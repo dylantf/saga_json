@@ -10,7 +10,7 @@ both sides see the same value.
 ```saga
 pub record Options {
   rename_all: NameStyle,
-  omit_nothing: Bool,
+  omit_nothings: Bool,
   tag_format: TagFormat,
   tag_field: String,
   content_field: String,
@@ -24,12 +24,38 @@ Build by record-updating `default_options`:
 let opts = { default_options | rename_all: CamelCase }
 ```
 
-Pass to the `_with` variants:
+…or chain the setters, which compose with `>>`:
 
 ```saga
-E.serialize_with opts value
-D.deserialize_with opts input
+import SagaJson as J (rename_keys, omit_nothings, CamelCase)
+
+let tweak = rename_keys CamelCase >> omit_nothings
+let opts = tweak default_options
 ```
+
+## Applying options: the `JsonOptions` effect
+
+`serialize_with` and `deserialize_with` don't take an `Options`
+argument. They read the *ambient* options from a `JsonOptions` handler
+installed at the call boundary with `with`. Build the handler with
+`json_opts`, which takes an `Options -> Options` function applied to
+the defaults:
+
+```saga
+import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson.Codec (serialize_with, deserialize_with)
+
+let camel = json_opts (rename_keys CamelCase)
+{
+  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
+} with camel
+# "{"firstName":"Ada","lastName":"Lovelace"}"
+```
+
+One `with` covers any number of nested encode/decode calls under the
+same policy. To start from a prebuilt `Options` value instead of the
+defaults, use `json_opts_from base f`, or the `json_defaults` handler
+for plain defaults.
 
 ## `rename_all`
 
@@ -51,13 +77,17 @@ record User {
   last_name: String,
 } deriving (ToJson, FromJson)
 
-let opts = { default_options | rename_all: CamelCase }
+let camel = json_opts (rename_keys CamelCase)
 
-serialize_with opts (User { first_name: "Ada", last_name: "Lovelace" })
+{
+  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
+} with camel
 # "{"firstName":"Ada","lastName":"Lovelace"}"
 
-deserialize_with opts """{"firstName":"Ada","lastName":"Lovelace"}"""
-  : Result User J.Error
+{
+  (deserialize_with """{"firstName":"Ada","lastName":"Lovelace"}"""
+    : Result User J.Error)
+} with camel
 # Ok(User { first_name: "Ada", last_name: "Lovelace" })
 ```
 
@@ -91,12 +121,10 @@ and `opts.content_field`. Both fields are always emitted, including
 for unit variants.
 
 ```saga
-let opts = { default_options |
-  tag_format: AdjacentlyTagged,
-  tag_field: "tag",
-  content_field: "value",
-}
-serialize_with opts Active
+let adjacent = json_opts (
+  tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value"
+)
+{ serialize_with Active } with adjacent
 # "{"tag":"Active","value":null}"
 ```
 
@@ -123,10 +151,11 @@ null
 42
 ```
 
-Decoding `Untagged` JSON typically requires hand-written logic
-because variant identity is lost on the wire.
+Decoding `Untagged` JSON tries each variant in order and takes the
+first that fits, so overlapping shapes resolve to the earliest
+declared variant.
 
-## `omit_nothing`
+## `omit_nothings`
 
 When `True`, `Maybe Nothing` fields are dropped from the output
 object entirely (rather than emitting `"field": null`).
@@ -137,13 +166,14 @@ record Notification {
   details: Maybe String,
 } deriving (ToJson)
 
-let opts = { default_options | omit_nothing: True }
-serialize_with opts (Notification { message: "hello", details: Nothing })
+{
+  serialize_with (Notification { message: "hello", details: Nothing })
+} with json_opts omit_nothings
 # "{"message":"hello"}"
 ```
 
 Encode-only. The decoder has no equivalent: a missing field is
-treated as an error, not as `Nothing`. So `omit_nothing: True` breaks
+treated as an error, not as `Nothing`. So `omit_nothings: True` breaks
 the round-trip through `deserialize_with` on the same options. Use it
 when you're emitting JSON for a consumer that prefers absence over
 null, not when you also need to read your own output back.
@@ -160,8 +190,8 @@ serialize Admin  # ""Admin""
 When `False`, unit variants emit the legacy wrapped form:
 
 ```saga
-let opts = { default_options | unit_variants_as_strings: False }
-serialize_with opts Admin  # "{"Admin":null}"
+{ serialize_with Admin } with json_opts (unit_variants_as_strings False)
+# "{"Admin":null}"
 ```
 
 The decoder always accepts both forms regardless of this flag, so
@@ -171,7 +201,8 @@ flipping it on the encode side won't break existing decoders.
 
 `Options` covers uniform knobs that apply to every variant. The
 strategy functions handle the per-type overrides that show up when
-the defaults are wrong for a specific ADT.
+the defaults are wrong for a specific ADT. They take an explicit
+`Options` argument and return `Iodata`; flatten with `C.to_string`.
 
 ### `as_enum`: emit every variant as a bare string
 
@@ -180,15 +211,15 @@ Useful when a downstream system only cares about the discriminator
 (analytics, logging, foreign enum compatibility).
 
 ```saga
-import SagaJson.Encode as E (as_enum, render)
+import SagaJson.Codec as C (as_enum)
 
 type Event =
   | Heartbeat
   | Login Int
   deriving (ToJson)
 
-render (as_enum default_options Heartbeat)   # ""Heartbeat""
-render (as_enum default_options (Login 42))  # ""Login""  — 42 discarded
+C.to_string (as_enum default_options Heartbeat)   # ""Heartbeat""
+C.to_string (as_enum default_options (Login 42))  # ""Login""  — 42 discarded
 ```
 
 To make `as_enum` the default for a specific type, write the impl by
@@ -196,15 +227,22 @@ hand:
 
 ```saga
 impl ToJson for Event {
-  to_json_with opts e = as_enum opts e
+  to_json opts e = as_enum opts e
 }
 ```
 
-The mirror on the decode side is `as_enum_from`:
+The mirror on the decode side is `as_enum_from`. Like the other
+streaming decoders it takes a `BitString` and returns the decoded
+value paired with the unconsumed tail:
 
 ```saga
-let dec = fun jj -> (as_enum_from default_options jj : Event)
-J.parse dec "\"Heartbeat\""  # Ok(Heartbeat)
+import Std.BitString as BS
+import SagaJson.Codec as C (as_enum_from)
+
+case C.as_enum_from default_options (BS.from_string "\"Heartbeat\"") {
+  Ok (event, _rest) -> (event : Event)    # Heartbeat
+  Err e -> ...
+}
 ```
 
 Decoding `as_enum_from` works for unit variants. Payload-bearing
@@ -217,108 +255,29 @@ variants too. Recovers the pre-default-refinement behavior.
 Round-trips losslessly via `as_tagged_from`.
 
 ```saga
-import SagaJson.Encode as E (as_tagged, render)
+import SagaJson.Codec as C (as_tagged)
 
-render (as_tagged default_options Heartbeat)   # "{"Heartbeat":null}"
-render (as_tagged default_options (Login 42))  # "{"Login":42}"
+C.to_string (as_tagged default_options Heartbeat)   # "{"Heartbeat":null}"
+C.to_string (as_tagged default_options (Login 42))  # "{"Login":42}"
 ```
 
 To use as a hand impl:
 
 ```saga
 impl ToJson for Event {
-  to_json_with opts e = as_tagged opts e
+  to_json opts e = as_tagged opts e
 }
 ```
 
-And on the decode side:
-
-```saga
-let dec = fun jj -> (as_tagged_from default_options jj : Event)
-J.parse dec "{\"Heartbeat\":null}"  # Ok(Heartbeat)
-```
-
-## Fluent builder API
-
-If you're going to set more than one `Options` field, the record-update
-syntax gets noisy. The `Encoder` / `Decoder` builders give you a
-pipeline-friendly alternative:
-
-```saga
-import SagaJson as J (rename_keys, omit_nothing)
-import SagaJson.Encode as E (encoder, serialize)
-
-record User {
-  first_name: String,
-  detail: Maybe String,
-} deriving (ToJson)
-
-User { first_name: "Ada", detail: Nothing }
-|> encoder
-|> rename_keys CamelCase
-|> omit_nothing
-|> serialize
-# "{"firstName":"Ada"}"
-```
-
-The chain works because `Encoder a` itself has a `ToJson` impl that
-substitutes its accumulated `Options` when `serialize` (or `to_json`)
-collapses the builder. The setters all live in `SagaJson` and are
-written against a shared `WithOptions` trait, so both `Encoder` and
-`Decoder` use the same vocabulary.
-
-### Encode-side entry points
-
-- `encoder : a -> Encoder a where {a: ToJson}`. Wraps a value with
-  `default_options`. The head of a fluent chain.
-- `encode_with : a -> Options -> Encoder a`. Wraps with a prebuilt
-  `Options` value. Use when you already have an `Options` you want
-  to reuse.
-
-### Decode-side entry points
-
-- `decoder : String -> Decoder`. Wraps an input string with
-  `default_options`.
-- `decode_with : String -> Options -> Decoder`. Wraps with a prebuilt
-  `Options`.
-- `decode : Decoder -> Result a Error where {a: FromJson}`. Collapses
-  the builder, parses the input, and runs the derived decoder.
-
-```saga
-import SagaJson.Decode as D (decoder, decode)
-
-"""{"firstName":"Ada","lastName":"Lovelace"}"""
-|> decoder
-|> rename_keys CamelCase
-|> decode : Result User J.Error
-# Ok(User { first_name: "Ada", last_name: "Lovelace" })
-```
-
-### The setters
-
-| Function                          | Sets                                              |
-| --------------------------------- | ------------------------------------------------- |
-| `rename_keys : NameStyle -> _`    | `rename_all`                                      |
-| `omit_nothing : _`                | `omit_nothing: True` (no-arg; encode-only)        |
-| `with_tag_format : TagFormat -> _`| `tag_format`                                      |
-| `with_tag_field : String -> _`    | `tag_field`                                       |
-| `with_content_field : String -> _`| `content_field`                                   |
-| `with_unit_variants_as_strings : Bool -> _` | `unit_variants_as_strings`              |
-
-Each setter returns the same builder type with one field of the
-underlying `Options` adjusted. Chain freely; order doesn't matter
-since each one writes a single field.
-
-The fluent API is a convenience over `serialize_with` /
-`deserialize_with`. Use whichever reads better at the call site.
-There's no behavioral difference.
+The decode-side mirror is `as_tagged_from`.
 
 ## Round-trip safety
 
-A round-trip with `serialize_with opts` followed by `deserialize_with
-opts` is lossless for every `Options` combination except:
+A round-trip with `serialize_with` followed by `deserialize_with`
+under the *same* `JsonOptions` handler is lossless for every `Options`
+combination except:
 
-- `omit_nothing: True`. Encode drops null-valued fields. Decode
+- `omit_nothings: True`. Encode drops null-valued fields. Decode
   requires them to be present.
 
 The strategy functions also have a known asymmetry: `as_enum` is
