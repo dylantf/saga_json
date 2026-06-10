@@ -18,9 +18,7 @@ import SagaJson.Parser (Value)
 opaque type Json = Json Value
 
 impl Debug for Json {
-  debug j = case j {
-    Json v -> debug v
-  }
+  debug (Json v) = debug v
 }
 
 #@ Error returned when JSON parsing or decoding fails.
