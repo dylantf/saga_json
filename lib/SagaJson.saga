@@ -1,5 +1,5 @@
 #@ JSON library top-level: the `Json` opaque type, the shared `Error` type,
-#@ the `Options` record and its `JsonOptions` effect, and the decoder-running
+#@ the `Options` record and its setters, and the decoder-running
 #@ entry points.
 #@
 #@ For encoding, see `SagaJson.Encode`. For decoding primitives and
@@ -54,9 +54,9 @@ to_value j = case j {
 #
 # Options live in the root module because both encode and decode consume
 # them. Uniform knobs only — anything that names a specific field belongs
-# in a hand-written impl. The `JsonOptions` effect makes them ambient:
-# `serialize_with` and `deserialize_with` read whichever options are in
-# scope at the call site, rather than threading an argument everywhere.
+# in a hand-written impl. An `Options` value is passed explicitly as the
+# first argument to `serialize_with` / `deserialize_with`; `serialize` /
+# `deserialize` use `default_options`.
 
 #@ How record field names and variant names are transformed before
 #@ emission (encode) or matched against input (decode). Source
@@ -119,69 +119,14 @@ default_options = Options {
   unit_variants_as_strings: True,
 }
 
-# --- JsonOptions effect ---
-#
-# Both `serialize_with` and `deserialize_with` carry `needs {JsonOptions}`
-# and read the active Options via `get_json_options!`. Install a handler
-# at the call boundary one of three ways:
-#
-#   # canonical defaults — `json_defaults` is a named handler
-#   { ... } with json_defaults
-#
-#   # default base + transform
-#   { ... } with json_opts (rename_keys CamelCase >> omit_nothings)
-#
-#   # custom base + transform
-#   { ... } with json_opts_from production_opts (rename_keys CamelCase)
-#
-# The `serialize` / `deserialize` shortcuts in Encode/Decode install
-# `json_defaults` inline, so callers that just want defaults never have
-# to mention the effect.
-
-#@ Ambient options for encode and decode. Read with `get_json_options!`
-#@ inside an `impl ToJson` / `impl FromJson` that needs to consult a knob
-#@ (rename_all, omit_nothings, tag_format, ...). Install at the call
-#@ boundary via `json_defaults`, `json_opts`, or `json_opts_from` below.
-pub effect JsonOptions {
-  fun get_json_options : Unit -> Options
-}
-
-#@ The canonical handler: resumes every `get_json_options!` with
-#@ `default_options`. Use directly: `{ ... } with json_defaults`.
-pub handler json_defaults for JsonOptions {
-  get_json_options () = resume default_options
-}
-
-#@ Build a handler that resumes `get_json_options!` with
-#@ `f default_options`. The common entry point for setting up an
-#@ options policy at a request boundary:
-#@
-#@   { ... } with json_opts (rename_keys CamelCase >> omit_nothings)
-pub fun json_opts : (Options -> Options) -> Handler JsonOptions
-json_opts f = handler for JsonOptions {
-  get_json_options () = resume f default_options
-}
-
-#@ Build a handler from a custom base rather than `default_options`.
-#@ Use when you already have a named `Options` value (e.g. a
-#@ per-environment configuration) you want to build on top of:
-#@
-#@   { ... } with json_opts_from production_opts (rename_keys CamelCase)
-pub fun json_opts_from : Options -> (Options -> Options) -> Handler JsonOptions
-json_opts_from base f = handler for JsonOptions {
-  get_json_options () = resume f base
-}
-
 # --- Options setters ---
 #
 # All setters have shape `... -> Options -> Options` so they chain with
-# `|>` and compose with `>>`. Combine inside a `json_opts` lambda:
-#
-#   ... with json_opts (rename_keys CamelCase >> omit_nothings)
-#
-# or build an Options value directly:
+# `|>` and compose with `>>`, building the `Options` value you pass to
+# `serialize_with` / `deserialize_with`:
 #
 #   let opts = default_options |> rename_keys CamelCase |> omit_nothings
+#   serialize_with opts value
 
 #@ Set the `rename_all` field.
 pub fun rename_keys : NameStyle -> Options -> Options

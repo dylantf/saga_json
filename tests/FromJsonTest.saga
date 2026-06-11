@@ -16,8 +16,7 @@ import SagaJson as J (
   NameStyle,
   TagFormat,
   default_options,
-  CamelCase,
-  JsonOptions
+  CamelCase
 )
 import Std.BitString as BS
 import SagaJson.Decode as D (refine, field, string, int)
@@ -272,9 +271,7 @@ tests () = {
 
       test "rejects bare string under unit_variants_as_strings: False" (fun () -> {
         let opts = { default_options | unit_variants_as_strings: False }
-        let got = deserialize_with "\"Admin\"" with {
-          get_json_options () = resume opts
-        }
+        let got = deserialize_with (opts) "\"Admin\""
         assert_err (got : Result Role J.Error)
       })
 
@@ -322,13 +319,38 @@ tests () = {
       test "rename_all: CamelCase round-trips through nested record" (fun () -> {
         let u = sample_user ()
         let opts = { default_options | rename_all: CamelCase }
-        let encoded = serialize_with u with {
-          get_json_options () = resume opts
-        }
-        let decoded = deserialize_with encoded with {
-          get_json_options () = resume opts
-        }
+        let encoded = serialize_with (opts) u
+        let decoded = deserialize_with (opts) encoded
         assert_eq (decoded : Result User J.Error) (Ok u)
+      })
+    })
+
+    # Records decode via an in-order streaming fast path that bails to the
+    # order-tolerant fallback on any key-order deviation. Both must agree.
+    describe "key order (fast path + fallback)" (fun () -> {
+      test "fields in declaration order (fast path)" (fun () ->
+        assert_eq (deserialize "{\"name\":\"Ada\",\"age\":30}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "fields out of order (fallback)" (fun () ->
+        assert_eq (deserialize "{\"age\":30,\"name\":\"Ada\"}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "extra unknown key (fallback)" (fun () ->
+        assert_eq (deserialize "{\"name\":\"Ada\",\"extra\":true,\"age\":30}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "nested record, outer fields reordered (fallback)" (fun () -> {
+        let a = Address {
+          street: "1 St", city: "Town", zip: "00000",
+          coords: Coords { lat: 40.7128, lng: -74.006 },
+        }
+        # Outer keys reordered so the top object takes the fallback; the nested
+        # `coords` (serialized verbatim) stays in order and rides the fast path.
+        let reordered =
+          "{\"coords\":" <> serialize a.coords <>
+          ",\"zip\":\"00000\",\"street\":\"1 St\",\"city\":\"Town\"}"
+        assert_eq (deserialize reordered : Result Address J.Error) (Ok a)
       })
     })
 

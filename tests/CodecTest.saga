@@ -7,7 +7,6 @@ import SagaJson (
   apply_name_style,
   CamelCase,
   rename_keys,
-  json_opts,
   tag_format,
   AdjacentlyTagged,
   InternallyTagged,
@@ -123,37 +122,34 @@ key_is expected actual bs =
   else Err (InvalidJson $"expected key '{expected}'")
 
 fun enc_camel : Pt -> String
-enc_camel p = {
-  let h = json_opts (rename_keys CamelCase)
-  C.serialize_with p with h
-}
+enc_camel p = C.serialize_with (rename_keys CamelCase default_options) p
 
 fun roundtrip_camel : Pt -> Result Pt Error
 roundtrip_camel p = {
-  let h = json_opts (rename_keys CamelCase)
-  let s = C.serialize_with p with h
-  C.deserialize_with s with h
+  let opts = rename_keys CamelCase default_options
+  let s = C.serialize_with opts p
+  C.deserialize_with opts s
 }
 
 fun rt_untagged : ShapeD -> Result ShapeD Error
 rt_untagged x = {
-  let h = json_opts (tag_format Untagged)
-  let s = C.serialize_with x with h
-  C.deserialize_with s with h
+  let opts = tag_format Untagged default_options
+  let s = C.serialize_with opts x
+  C.deserialize_with opts s
 }
 
 fun rt_adjacent : ShapeD -> Result ShapeD Error
 rt_adjacent x = {
-  let h = json_opts (tag_format AdjacentlyTagged)
-  let s = C.serialize_with x with h
-  C.deserialize_with s with h
+  let opts = tag_format AdjacentlyTagged default_options
+  let s = C.serialize_with opts x
+  C.deserialize_with opts s
 }
 
 fun rt_internal : ShapeI -> Result ShapeI Error
 rt_internal x = {
-  let h = json_opts (tag_format InternallyTagged)
-  let s = C.serialize_with x with h
-  C.deserialize_with s with h
+  let opts = tag_format InternallyTagged default_options
+  let s = C.serialize_with opts x
+  C.deserialize_with opts s
 }
 
 fun dec_enum_from : String -> Result ShapeD Error
@@ -290,18 +286,18 @@ tests () = {
 
     describe "InternallyTagged encode (Value bridge)" (fun () -> {
       test "record payload merges tag into object" (fun () -> {
-        let h = json_opts (tag_format InternallyTagged)
-        let out = C.serialize_with (Circ (CircleR { radius: 5 })) with h
+        let opts = tag_format InternallyTagged default_options
+        let out = C.serialize_with opts (Circ (CircleR { radius: 5 }))
         assert_eq out "{\"tag\":\"Circ\",\"radius\":5}"
       })
       test "unit variant emits tag only" (fun () -> {
-        let h = json_opts (tag_format InternallyTagged)
-        let out = C.serialize_with Pointy with h
+        let opts = tag_format InternallyTagged default_options
+        let out = C.serialize_with opts Pointy
         assert_eq out "{\"tag\":\"Pointy\"}"
       })
       test "primitive payload falls back to external shape" (fun () -> {
-        let h = json_opts (tag_format InternallyTagged)
-        let out = C.serialize_with (Numbered 7) with h
+        let opts = tag_format InternallyTagged default_options
+        let out = C.serialize_with opts (Numbered 7)
         assert_eq out "{\"Numbered\":7}"
       })
     })

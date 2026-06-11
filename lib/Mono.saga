@@ -1,0 +1,269 @@
+#@ SKETCH: the no-generics, no-effects, no-Options design.
+#@
+#@ Every `to_json_*` / `from_json_*` below is hand-written as a stand-in for
+#@ what `deriving (ToJson)` / `deriving (FromJson)` would mechanically emit:
+#@ one monomorphic function per type. No `Generic` rep, no trait dictionaries,
+#@ no `needs {Fail Error}`, and no `Options`.
+#@
+#@ Derive emits only the defaults: field name = source name verbatim,
+#@ externally-tagged sums, unit variants as bare strings, nulls emitted.
+#@ Customization is not a config record threaded at runtime — it's code. To
+#@ rename a field you stop deriving that one type and write the function,
+#@ editing the key literal in place. The keys are literals, so there is no
+#@ per-field `apply_name_style` call on the hot path.
+#@
+#@ Encoders are `T -> Iodata`; decoders are `BitString -> Result (T, BitString)
+#@ Error`. Polymorphic children are passed as explicit args (`enc_list
+#@ enc_string`); nested types are a direct call (`to_json_address ...`).
+#@
+#@ Leans on three primitives currently private in SagaJson.Codec —
+#@ `parse_object_raw`, `parse_array_raw`, `lookup_raw`. Flip them to `pub`
+#@ (one word each) to compile. Not yet typechecked.
+module SagaJson.Mono
+
+import Std.Base (Show)
+import Std.BitString as BS
+import Std.List
+import SagaJson (Error)
+import SagaJson.Codec as C
+import SagaJson.Escape as Escape
+
+# ===========================================================================
+# Shared runtime — the whole "library" the generated code calls. Plain
+# functions. The polymorphic ones (enc_list, dec_list, req, opt) take the
+# child codec as an argument: HOF-passing replaces trait dictionaries.
+# ===========================================================================
+
+# --- Primitive encoders (value -> Iodata) ---
+
+fun enc_string : String -> C.Iodata
+enc_string s = C.raw (Escape.escape_string s)
+
+fun enc_int : Int -> C.Iodata
+enc_int n = C.raw (show n)
+
+fun enc_bool : Bool -> C.Iodata
+enc_bool b = C.raw (if b then "true" else "false")
+
+fun enc_maybe : (a -> C.Iodata) -> Maybe a -> C.Iodata
+enc_maybe enc m = case m {
+  Nothing -> C.raw "null"
+  Just x -> enc x
+}
+
+fun enc_list : (a -> C.Iodata) -> List a -> C.Iodata
+enc_list enc xs = C.array (List.map enc xs)
+
+# --- Primitive decoders (BitString -> Result (value, tail)) ---
+
+fun dec_string : BitString -> Result (String, BitString) Error
+dec_string bs = C.parse_string bs
+
+fun dec_int : BitString -> Result (Int, BitString) Error
+dec_int bs = C.parse_int bs
+
+fun dec_bool : BitString -> Result (Bool, BitString) Error
+dec_bool bs = C.parse_bool bs
+
+fun dec_list : (BitString -> Result (a, BitString) Error) -> BitString
+  -> Result (List a, BitString) Error
+dec_list dec bs = do {
+  Ok (slices, rest) <- C.parse_array_raw bs
+  Ok vs <- dec_each dec slices
+  Ok (vs, rest)
+} else { Err e -> Err e }
+
+fun dec_each : (BitString -> Result (a, BitString) Error) -> List BitString
+  -> Result (List a) Error
+dec_each dec slices = case slices {
+  [] -> Ok []
+  s :: rest -> do {
+    Ok (v, _) <- dec s
+    Ok vs <- dec_each dec rest
+    Ok (v :: vs)
+  } else { Err e -> Err e }
+}
+
+# Required field: look the key up in the pre-split object, run its decoder on
+# the value slice, discard the slice tail. Order-independent.
+fun req : String -> (BitString -> Result (a, BitString) Error)
+  -> List (String, BitString) -> Result a Error
+req name dec fields = case C.lookup_raw name fields {
+  Just slice -> do { Ok (v, _) <- dec slice
+    Ok v } else { Err e -> Err e }
+  Nothing -> Err (InvalidShape $"field '{name}'" "missing" [name])
+}
+
+# Optional (Maybe) field: absent key OR explicit null both decode to Nothing.
+fun opt : String -> (BitString -> Result (a, BitString) Error)
+  -> List (String, BitString) -> Result (Maybe a) Error
+opt name dec fields = case C.lookup_raw name fields {
+  Nothing -> Ok Nothing
+  Just slice -> case C.skip_ws slice {
+    <<"null", _/binary>> -> Ok Nothing
+    _ -> do { Ok (v, _) <- dec slice
+      Ok (Just v) } else { Err e -> Err e }
+  }
+}
+
+# ===========================================================================
+# Example types (would carry `deriving (ToJson, FromJson)`).
+# ===========================================================================
+
+record Address {
+  street: String,
+  city: String,
+} deriving (Debug)
+
+type Role =
+  | Admin
+  | Editor
+  | Viewer
+  deriving (Debug)
+
+# Mixed ADT: unit + single-payload + multi-arg.
+type Event =
+  | Heartbeat
+  | Login Int
+  | Click Int Int
+  deriving (Debug)
+
+record User {
+  id: Int,
+  name: String,
+  age: Maybe Int,
+  role: Role,
+  address: Address,
+  tags: List String,
+} deriving (Debug)
+
+# ===========================================================================
+# ENCODE — what `deriving (ToJson)` emits. Literal keys, direct child calls.
+# To rename `id` to `userId`, stop deriving User and edit the key here.
+# ===========================================================================
+
+fun to_json_address : Address -> C.Iodata
+to_json_address a = C.object [
+  ("street", enc_string a.street),
+  ("city", enc_string a.city),
+]
+
+# Default sum encoding: unit -> bare string, payload -> {"Variant": payload}.
+fun to_json_role : Role -> C.Iodata
+to_json_role r = case r {
+  Admin -> enc_string "Admin"
+  Editor -> enc_string "Editor"
+  Viewer -> enc_string "Viewer"
+}
+
+fun to_json_event : Event -> C.Iodata
+to_json_event e = case e {
+  Heartbeat -> enc_string "Heartbeat"
+  Login n -> C.object [("Login", enc_int n)]
+  # multi-arg constructor -> positional array
+  Click x y -> C.object [("Click", C.array [enc_int x, enc_int y])]
+}
+
+fun to_json_user : User -> C.Iodata
+to_json_user u = C.object [
+  ("id", enc_int u.id),
+  ("name", enc_string u.name),
+  ("age", enc_maybe enc_int u.age),
+  ("role", to_json_role u.role),            # nested = direct call
+  ("address", to_json_address u.address),
+  ("tags", enc_list enc_string u.tags),     # child codec passed in
+]
+
+# ===========================================================================
+# DECODE — what `deriving (FromJson)` emits. Records split once into
+# (key, value-slice) pairs, then look up each field by literal key.
+# ===========================================================================
+
+fun from_json_address : BitString -> Result (Address, BitString) Error
+from_json_address bs = do {
+  Ok (fields, rest) <- C.parse_object_raw bs
+  Ok street <- req "street" dec_string fields
+  Ok city <- req "city" dec_string fields
+  Ok (Address { street: street, city: city }, rest)
+} else { Err e -> Err e }
+
+# Unit-only ADT: bare-string tag. (Accepting the legacy {"Admin":null} form
+# would be a hand-written choice, not a default.)
+fun from_json_role : BitString -> Result (Role, BitString) Error
+from_json_role bs = case C.skip_ws bs {
+  <<34, _/binary>> -> do {
+    Ok (tag, rest) <- C.parse_string bs
+    case tag {
+      "Admin" -> Ok (Admin, rest)
+      "Editor" -> Ok (Editor, rest)
+      "Viewer" -> Ok (Viewer, rest)
+      _ -> Err (InvalidShape "Role variant" tag [])
+    }
+  } else { Err e -> Err e }
+  _ -> Err (InvalidShape "Role" "non-string" [])
+}
+
+# Mixed ADT, externally tagged: bare string for unit, {"V": payload} otherwise.
+fun from_json_event : BitString -> Result (Event, BitString) Error
+from_json_event bs = case C.skip_ws bs {
+  <<34, _/binary>> -> do {
+    Ok (tag, rest) <- C.parse_string bs
+    case tag {
+      "Heartbeat" -> Ok (Heartbeat, rest)
+      _ -> Err (InvalidShape "Event unit variant" tag [])
+    }
+  } else { Err e -> Err e }
+  <<123, _/binary>> -> do {
+    Ok (fields, rest) <- C.parse_object_raw bs
+    case fields {
+      [(tag, slice)] -> case tag {
+        "Login" -> do { Ok (n, _) <- C.parse_int slice
+          Ok (Login n, rest) } else { Err e -> Err e }
+        "Click" -> do {
+          Ok (xs, _) <- C.parse_array_raw slice
+          case xs {
+            [s1, s2] -> do {
+              Ok (x, _) <- C.parse_int s1
+              Ok (y, _) <- C.parse_int s2
+              Ok (Click x y, rest)
+            } else { Err e -> Err e }
+            _ -> Err (InvalidShape "Click args" "wrong length" [])
+          }
+        } else { Err e -> Err e }
+        _ -> Err (InvalidShape "Event variant" tag [])
+      }
+      _ -> Err (InvalidShape "single-key object" "other" [])
+    }
+  } else { Err e -> Err e }
+  _ -> Err (InvalidShape "Event" "non-object" [])
+}
+
+fun from_json_user : BitString -> Result (User, BitString) Error
+from_json_user bs = do {
+  Ok (fields, rest) <- C.parse_object_raw bs
+  Ok id <- req "id" dec_int fields
+  Ok name <- req "name" dec_string fields
+  Ok age <- opt "age" dec_int fields
+  Ok role <- req "role" from_json_role fields       # child codec passed in
+  Ok address <- req "address" from_json_address fields
+  Ok tags <- req "tags" (dec_list dec_string) fields
+  Ok (User {
+    id: id, name: name, age: age, role: role, address: address, tags: tags,
+  }, rest)
+} else { Err e -> Err e }
+
+# ===========================================================================
+# Entry points. Derive emits a per-type wrapper (or wrap the bare function in
+# an `impl ToJson` to keep a single polymorphic `serialize`).
+# ===========================================================================
+
+fun serialize_user : User -> String
+serialize_user u = C.to_string (to_json_user u)
+
+fun deserialize_user : String -> Result User Error
+deserialize_user s = case from_json_user (BS.from_string s) {
+  Ok (v, rest) ->
+    if BS.is_empty (C.skip_ws rest) then Ok v
+    else Err (InvalidJson "trailing content after JSON value")
+  Err e -> Err e
+}

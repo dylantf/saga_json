@@ -6,9 +6,9 @@
 #@ path (dynamic JSON, combinators, post-processing, internally-tagged /
 #@ untagged sums).
 #@
-#@ Options are read once from the `JsonOptions` effect at the `serialize` /
-#@ `deserialize` boundary and threaded down explicitly as an `Options`
-#@ value, so the per-node code never touches the effect.
+#@ An `Options` value is passed explicitly to `serialize_with` /
+#@ `deserialize_with` and threaded down through `to_json` / `from_json`;
+#@ `serialize` / `deserialize` use `default_options`.
 module SagaJson.Codec
 
 import Std.BitString as BS
@@ -25,8 +25,7 @@ import SagaJson (
   AdjacentlyTagged,
   InternallyTagged,
   Untagged,
-  JsonOptions,
-  json_defaults,
+  default_options,
   apply_name_style
 )
 import SagaJson.Parser (Value)
@@ -202,7 +201,7 @@ impl ToJson for (a, b, c, d, e, f, g, h, i, j)
 #
 # Fused mirror of SagaJson.Encode's Value-based Rep impls: same structure,
 # but each impl emits Iodata directly and threads `Options` explicitly
-# instead of reading the JsonOptions effect per node. These make
+# instead of reading options from an effect per node. These make
 # `deriving (ToJson)` produce fused encoders.
 
 trait ToJsonFields a {
@@ -362,15 +361,13 @@ not_null_field (_, v) = to_bytes v != null_bytes
 
 #@ Encode a value to a compact JSON string using the canonical defaults.
 pub fun serialize : a -> String where {a: ToJson}
-serialize x = serialize_with x with json_defaults
+serialize x = serialize_with default_options x
 
-#@ Encode a value, reading the active options from the ambient
-#@ `JsonOptions` handler once and threading them down.
-pub fun serialize_with : a -> String needs {JsonOptions} where {a: ToJson}
-serialize_with x = {
-  let opts = get_json_options! ()
-  to_string (to_json opts x)
-}
+#@ Encode a value with explicit `Options` (rename_all, omit_nothings, tag
+#@ format, ...). Build the options with the setters, e.g.
+#@ `default_options |> rename_keys CamelCase`.
+pub fun serialize_with : Options -> a -> String where {a: ToJson}
+serialize_with opts x = to_string (to_json opts x)
 
 #@ Call the Generic-derived encoding explicitly, so a hand-written
 #@ `impl ToJson` can start from the derived shape and post-process. Without
@@ -434,7 +431,7 @@ parse_value bs = case P.parse_value bs {
 
 # --- Iodata string escaping (zero-copy clean runs) ---
 
-fun escape_io : String -> Iodata
+pub fun escape_io : String -> Iodata
 escape_io s = {
   let bs = BS.from_string s
   let frags = scan_str bs 0 0 bs []
@@ -747,6 +744,20 @@ trait FromJsonFields a {
   fun from_fields : Options -> List (String, BitString) -> Result a Error
 }
 
+# In-order streaming field decoder (the fast path). Decodes a record's fields
+# straight from the byte stream in declaration order — single pass, each value
+# parsed in place, no intermediate (key, slice) list, no value re-scan, no
+# by-name lookup. `stream_fields` returns `Err` on any deviation (key out of
+# order, renamed-away, missing) so `FromJson for Record` can fall back to the
+# order-tolerant `from_fields` path. This is the shape a hand-written decoder
+# takes; it carries no per-field builder type, so it stays a single-param trait
+# (which is all the surface `impl` syntax can express).
+trait FromJsonStream a {
+  # `bs` is positioned at a field key (just after `{` or a `,`). On success the
+  # rest is positioned right after the field's value (at the following `,`/`}`).
+  fun stream_fields : Options -> BitString -> Result (a, BitString) Error
+}
+
 trait FromJsonArgs a {
   fun from_args : Options -> List BitString -> Result (a, List BitString) Error
 }
@@ -772,14 +783,36 @@ impl FromJson for Or l r where {l: FromJson, r: FromJson} {
   }
 }
 
-impl FromJson for Record a where {a: FromJsonFields} {
-  from_json opts bs = case parse_object_raw bs {
-    Ok (pairs, rest) -> case from_fields opts pairs {
-      Ok inner -> Ok (Record "" inner, rest)
-      Err e -> Err e
+impl FromJson for Record a where {a: FromJsonStream + FromJsonFields} {
+  from_json opts bs = {
+    let start = skip_ws bs
+    case expect 123 start {
+      Ok b0 -> case stream_fields opts b0 {
+        # Fast path consumed every field in order; require the closing brace
+        # immediately after, else there are extra/reordered keys → fall back.
+        Ok (inner, b1) -> case skip_ws b1 {
+          <<125, rest/binary>> -> Ok (Record "" inner, rest)
+          _ -> record_fallback opts start
+        }
+        Err _ -> record_fallback opts start
+      }
+      # Not even an object — let the fallback produce the canonical error.
+      Err _ -> record_fallback opts start
     }
+  }
+}
+
+# Order-tolerant decode: split the object into (key, slice) pairs once and
+# resolve each field by name. Used when the in-order fast path bails (foreign
+# key order, extra keys). Same algorithm the library used before streaming.
+fun record_fallback : Options -> BitString -> Result (Record a, BitString) Error
+  where {a: FromJsonFields}
+record_fallback opts bs = case parse_object_raw bs {
+  Ok (pairs, rest) -> case from_fields opts pairs {
+    Ok inner -> Ok (Record "" inner, rest)
     Err e -> Err e
   }
+  Err e -> Err e
 }
 
 impl FromJson for Adt a where {a: FromJson} {
@@ -939,6 +972,39 @@ impl FromJsonFields for And l r where {l: FromJsonFields, r: FromJsonFields} {
   }
 }
 
+# Streaming (in-order) counterparts. A field expects its own key next; a
+# product decodes its left field, consumes the separating `,`, then its right.
+impl FromJsonStream for Labeled (n : Symbol) a where {n: KnownSymbol, a: FromJson} {
+  stream_fields opts bs = {
+    let name = apply_name_style opts.rename_all (symbol_name (Proxy : Proxy n))
+    case parse_string bs {
+      Ok (key, b1) ->
+        if key == name then case expect 58 b1 {
+          Ok b2 -> case from_json opts b2 {
+            Ok (v, rest) -> Ok (Labeled v, rest)
+            Err e -> Err e
+          }
+          Err e -> Err e
+        }
+        else Err (InvalidShape $"field '{name}'" $"field '{key}'" [name])
+      Err e -> Err e
+    }
+  }
+}
+
+impl FromJsonStream for And l r where {l: FromJsonStream, r: FromJsonStream} {
+  stream_fields opts bs = case stream_fields opts bs {
+    Ok (lv, b1) -> case expect 44 b1 {
+      Ok b2 -> case stream_fields opts b2 {
+        Ok (rv, b3) -> Ok (And lv rv, b3)
+        Err e -> Err e
+      }
+      Err e -> Err e
+    }
+    Err e -> Err e
+  }
+}
+
 impl FromJsonArgs for Leaf a where {a: FromJson} {
   from_args opts xs = case xs {
     s :: rest -> case from_json opts s {
@@ -987,7 +1053,7 @@ impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} {
 }
 
 # Split an object once into (key, raw-value-slice) pairs + the tail after `}`.
-fun parse_object_raw : BitString -> Result (List (String, BitString), BitString) Error
+pub fun parse_object_raw : BitString -> Result (List (String, BitString), BitString) Error
 parse_object_raw bs = case expect 123 bs {
   Ok b0 -> obj_members b0 []
   Err e -> Err e
@@ -1023,7 +1089,7 @@ obj_members bs acc = {
 }
 
 # Split an array once into raw element slices + the tail after `]`.
-fun parse_array_raw : BitString -> Result (List BitString, BitString) Error
+pub fun parse_array_raw : BitString -> Result (List BitString, BitString) Error
 parse_array_raw bs = case expect 91 bs {
   Ok b0 -> arr_members b0 []
   Err e -> Err e
@@ -1049,7 +1115,7 @@ arr_members bs acc = {
   }
 }
 
-fun lookup_raw : String -> List (String, BitString) -> Maybe BitString
+pub fun lookup_raw : String -> List (String, BitString) -> Maybe BitString
 lookup_raw _ [] = Nothing
 lookup_raw k ((k2, v) :: rest) = if k == k2 then Just v else lookup_raw k rest
 
@@ -1111,20 +1177,16 @@ skip_elements bs = case skip_ws bs {
 
 #@ Parse and decode a JSON string into the target type using defaults.
 pub fun deserialize : String -> Result a Error where {a: FromJson}
-deserialize s = deserialize_with s with json_defaults
+deserialize s = deserialize_with default_options s
 
-#@ Parse and decode, reading options once from the ambient handler.
-pub fun deserialize_with : String -> Result a Error
-  needs {JsonOptions}
+#@ Parse and decode with explicit `Options` (rename_all, tag format, ...).
+pub fun deserialize_with : Options -> String -> Result a Error
   where {a: FromJson}
-deserialize_with s = {
-  let opts = get_json_options! ()
-  case from_json opts (BS.from_string s) {
-    Ok (v, rest) ->
-      if BS.is_empty (skip_ws rest) then Ok v
-      else Err (InvalidJson "trailing content after JSON value")
-    Err e -> Err e
-  }
+deserialize_with opts s = case from_json opts (BS.from_string s) {
+  Ok (v, rest) ->
+    if BS.is_empty (skip_ws rest) then Ok v
+    else Err (InvalidJson "trailing content after JSON value")
+  Err e -> Err e
 }
 
 #@ Call the Generic-derived decoding explicitly (mirror of `derive`), so a

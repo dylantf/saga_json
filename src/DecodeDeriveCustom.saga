@@ -1,16 +1,15 @@
-#@ Decoding with `deriving (FromJson)` plus customization via the
-#@ `JsonOptions` effect.
+#@ Decoding with `deriving (FromJson)` plus customization via an explicit
+#@ `Options` value.
 #@
-#@ Mirror of `EncodeDeriveCustom` on the decode side. Instead of threading
-#@ an `Options` argument, install a `JsonOptions` handler at the call
-#@ boundary; `deserialize_with` reads the ambient options. Common use
-#@ cases: input JSON uses camelCase keys while your fields are snake_case,
-#@ or the input uses a different tagged-union shape than the default.
+#@ Mirror of `EncodeDeriveCustom` on the decode side. Build an `Options`
+#@ with the setters and pass it as the first argument to
+#@ `deserialize_with`. Common use cases: input JSON uses camelCase keys
+#@ while your fields are snake_case, or the input uses a different
+#@ tagged-union shape than the default.
 module DecodeDeriveCustom
 
 import Std.BitString as BS
 import SagaJson as J (
-  json_opts,
   rename_keys,
   tag_format,
   tag_field,
@@ -58,27 +57,25 @@ pub fun run : Unit -> Unit
 run () = {
   dbg "=== Decoding by derive with customization ==="
 
-  # Rename: input keys are camelCase, fields are snake_case. Build a
-  # handler with json_opts and attach it to the block via `with`; one
-  # handler covers any number of nested deserializations.
-  let camel = json_opts (rename_keys CamelCase)
+  # Rename: input keys are camelCase, fields are snake_case. Build the
+  # Options once and pass it as the first argument.
+  let camel = rename_keys CamelCase default_options
   let camel_input = """
     {"firstName":"Ada","lastName":"Lovelace"}
     """
-  {
-    dbg (deserialize_with camel_input : Result User J.Error)
-  } with camel
+  dbg (deserialize_with camel camel_input : Result User J.Error)
 
   # Tag format: switch from the default external tag ("Active") to
-  # adjacent ({"tag":"Active","value":null}). Setters compose with `>>`.
+  # adjacent ({"tag":"Active","value":null}). Setters chain with `|>`.
   let adjacent =
-    json_opts (tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value")
+    default_options
+    |> tag_format AdjacentlyTagged
+    |> tag_field "tag"
+    |> content_field "value"
   let adjacent_input = """
     {"tag":"Active","value":null}
     """
-  {
-    dbg (deserialize_with adjacent_input : Result Status J.Error)
-  } with adjacent
+  dbg (deserialize_with adjacent adjacent_input : Result Status J.Error)
 
   # as_enum_from: bare-string variant decoding. Routes through the default
   # externally-tagged path with `unit_variants_as_strings: True`, so both
