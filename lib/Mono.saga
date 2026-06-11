@@ -1,24 +1,26 @@
-#@ SKETCH: the no-generics, no-effects, no-Options design.
+#@ The no-generics, no-effects, no-Options codec path.
 #@
-#@ Every `to_json_*` / `from_json_*` below is hand-written as a stand-in for
-#@ what `deriving (ToJson)` / `deriving (FromJson)` would mechanically emit:
-#@ one monomorphic function per type. No `Generic` rep, no trait dictionaries,
-#@ no `needs {Fail Error}`, and no `Options`.
+#@ The `pub` functions below (`enc_*` / `dec_*` / `req` / `opt`) are the shared
+#@ runtime: the whole "library" that generated or hand-written codecs call.
+#@ Plain functions, no trait dictionaries — the polymorphic ones take the child
+#@ codec as an explicit argument (`enc_list enc_string`). This is the runtime
+#@ `deriving (ToJson)` / `deriving (FromJson)` would target once it emits one
+#@ monomorphic function per type instead of a `Generic` Rep walk.
 #@
-#@ Derive emits only the defaults: field name = source name verbatim,
+#@ The `to_json_*` / `from_json_*` functions further down are NOT part of the
+#@ runtime — they are hand-written stand-ins for that emitted code, kept here
+#@ as a worked reference of the shape derive should produce. Encoders are
+#@ `T -> Iodata` built as flat `concat [raw "{\"f\":", child, ...]` (literal
+#@ keys, no `object` pair-list); decoders are `BitString -> Result (T,
+#@ BitString) Error`; nested types are a direct call.
+#@
+#@ Behaviour is the defaults only: field name = source name verbatim,
 #@ externally-tagged sums, unit variants as bare strings, nulls emitted.
-#@ Customization is not a config record threaded at runtime — it's code. To
-#@ rename a field you stop deriving that one type and write the function,
-#@ editing the key literal in place. The keys are literals, so there is no
-#@ per-field `apply_name_style` call on the hot path.
-#@
-#@ Encoders are `T -> Iodata`; decoders are `BitString -> Result (T, BitString)
-#@ Error`. Polymorphic children are passed as explicit args (`enc_list
-#@ enc_string`); nested types are a direct call (`to_json_address ...`).
-#@
-#@ Leans on three primitives currently private in SagaJson.Codec —
-#@ `parse_object_raw`, `parse_array_raw`, `lookup_raw`. Flip them to `pub`
-#@ (one word each) to compile. Not yet typechecked.
+#@ Customization is not a runtime `Options` record — it's code. To rename a
+#@ field you stop deriving that one type and write the function, editing the
+#@ key literal in place; because the keys are literals there is no per-field
+#@ `apply_name_style` on the hot path. See [SagaJson.Codec] for the
+#@ trait-based, `Options`-configurable path.
 module SagaJson.Mono
 
 import Std.Base (Show)
@@ -36,36 +38,36 @@ import SagaJson.Escape as Escape
 
 # --- Primitive encoders (value -> Iodata) ---
 
-fun enc_string : String -> C.Iodata
+pub fun enc_string : String -> C.Iodata
 enc_string s = C.raw (Escape.escape_string s)
 
-fun enc_int : Int -> C.Iodata
+pub fun enc_int : Int -> C.Iodata
 enc_int n = C.raw (show n)
 
-fun enc_bool : Bool -> C.Iodata
+pub fun enc_bool : Bool -> C.Iodata
 enc_bool b = C.raw (if b then "true" else "false")
 
-fun enc_maybe : (a -> C.Iodata) -> Maybe a -> C.Iodata
+pub fun enc_maybe : (a -> C.Iodata) -> Maybe a -> C.Iodata
 enc_maybe enc m = case m {
   Nothing -> C.raw "null"
   Just x -> enc x
 }
 
-fun enc_list : (a -> C.Iodata) -> List a -> C.Iodata
+pub fun enc_list : (a -> C.Iodata) -> List a -> C.Iodata
 enc_list enc xs = C.array (List.map enc xs)
 
 # --- Primitive decoders (BitString -> Result (value, tail)) ---
 
-fun dec_string : BitString -> Result (String, BitString) Error
+pub fun dec_string : BitString -> Result (String, BitString) Error
 dec_string bs = C.parse_string bs
 
-fun dec_int : BitString -> Result (Int, BitString) Error
+pub fun dec_int : BitString -> Result (Int, BitString) Error
 dec_int bs = C.parse_int bs
 
-fun dec_bool : BitString -> Result (Bool, BitString) Error
+pub fun dec_bool : BitString -> Result (Bool, BitString) Error
 dec_bool bs = C.parse_bool bs
 
-fun dec_list : (BitString -> Result (a, BitString) Error) -> BitString
+pub fun dec_list : (BitString -> Result (a, BitString) Error) -> BitString
   -> Result (List a, BitString) Error
 dec_list dec bs = do {
   Ok (slices, rest) <- C.parse_array_raw bs
@@ -86,7 +88,7 @@ dec_each dec slices = case slices {
 
 # Required field: look the key up in the pre-split object, run its decoder on
 # the value slice, discard the slice tail. Order-independent.
-fun req : String -> (BitString -> Result (a, BitString) Error)
+pub fun req : String -> (BitString -> Result (a, BitString) Error)
   -> List (String, BitString) -> Result a Error
 req name dec fields = case C.lookup_raw name fields {
   Just slice -> do { Ok (v, _) <- dec slice
@@ -95,7 +97,7 @@ req name dec fields = case C.lookup_raw name fields {
 }
 
 # Optional (Maybe) field: absent key OR explicit null both decode to Nothing.
-fun opt : String -> (BitString -> Result (a, BitString) Error)
+pub fun opt : String -> (BitString -> Result (a, BitString) Error)
   -> List (String, BitString) -> Result (Maybe a) Error
 opt name dec fields = case C.lookup_raw name fields {
   Nothing -> Ok Nothing
@@ -143,9 +145,10 @@ record User {
 # ===========================================================================
 
 fun to_json_address : Address -> C.Iodata
-to_json_address a = C.object [
-  ("street", enc_string a.street),
-  ("city", enc_string a.city),
+to_json_address a = C.concat [
+  C.raw "{\"street\":", enc_string a.street,
+  C.raw ",\"city\":", enc_string a.city,
+  C.raw "}",
 ]
 
 # Default sum encoding: unit -> bare string, payload -> {"Variant": payload}.
@@ -159,19 +162,21 @@ to_json_role r = case r {
 fun to_json_event : Event -> C.Iodata
 to_json_event e = case e {
   Heartbeat -> enc_string "Heartbeat"
-  Login n -> C.object [("Login", enc_int n)]
+  Login n -> C.concat [C.raw "{\"Login\":", enc_int n, C.raw "}"]
   # multi-arg constructor -> positional array
-  Click x y -> C.object [("Click", C.array [enc_int x, enc_int y])]
+  Click x y ->
+    C.concat [C.raw "{\"Click\":", C.array [enc_int x, enc_int y], C.raw "}"]
 }
 
 fun to_json_user : User -> C.Iodata
-to_json_user u = C.object [
-  ("id", enc_int u.id),
-  ("name", enc_string u.name),
-  ("age", enc_maybe enc_int u.age),
-  ("role", to_json_role u.role),            # nested = direct call
-  ("address", to_json_address u.address),
-  ("tags", enc_list enc_string u.tags),     # child codec passed in
+to_json_user u = C.concat [
+  C.raw "{\"id\":", enc_int u.id,
+  C.raw ",\"name\":", enc_string u.name,
+  C.raw ",\"age\":", enc_maybe enc_int u.age,
+  C.raw ",\"role\":", to_json_role u.role,           # nested = direct call
+  C.raw ",\"address\":", to_json_address u.address,
+  C.raw ",\"tags\":", enc_list enc_string u.tags,    # child codec passed in
+  C.raw "}",
 ]
 
 # ===========================================================================
