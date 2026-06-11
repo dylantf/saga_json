@@ -5,8 +5,8 @@
 #@
 #@ - EncodeDerive / DecodeDerive: the common path — `deriving (ToJson)` /
 #@   `deriving (FromJson)` + `serialize` / `deserialize`.
-#@ - EncodeDeriveCustom / DecodeDeriveCustom: deriving + the `JsonOptions`
-#@   effect for renaming, tag format, omit-nothings, etc.
+#@ - EncodeDeriveCustom / DecodeDeriveCustom: deriving + an explicit
+#@   `Options` value for renaming, tag format, omit-nothings, etc.
 #@ - EncodeHand / DecodeHand: full manual control — a hand-written fused
 #@   `impl ToJson`, and a hand-written decoder built from combinators.
 module Main

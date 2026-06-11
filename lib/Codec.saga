@@ -6,9 +6,9 @@
 #@ path (dynamic JSON, combinators, post-processing, internally-tagged /
 #@ untagged sums).
 #@
-#@ Options are read once from the `JsonOptions` effect at the `serialize` /
-#@ `deserialize` boundary and threaded down explicitly as an `Options`
-#@ value, so the per-node code never touches the effect.
+#@ An `Options` value is passed explicitly to `serialize_with` /
+#@ `deserialize_with` and threaded down through `to_json` / `from_json`;
+#@ `serialize` / `deserialize` use `default_options`.
 module SagaJson.Codec
 
 import Std.BitString as BS
@@ -25,8 +25,7 @@ import SagaJson (
   AdjacentlyTagged,
   InternallyTagged,
   Untagged,
-  JsonOptions,
-  json_defaults,
+  default_options,
   apply_name_style
 )
 import SagaJson.Parser (Value)
@@ -202,7 +201,7 @@ impl ToJson for (a, b, c, d, e, f, g, h, i, j)
 #
 # Fused mirror of SagaJson.Encode's Value-based Rep impls: same structure,
 # but each impl emits Iodata directly and threads `Options` explicitly
-# instead of reading the JsonOptions effect per node. These make
+# instead of reading options from an effect per node. These make
 # `deriving (ToJson)` produce fused encoders.
 
 trait ToJsonFields a {
@@ -362,15 +361,13 @@ not_null_field (_, v) = to_bytes v != null_bytes
 
 #@ Encode a value to a compact JSON string using the canonical defaults.
 pub fun serialize : a -> String where {a: ToJson}
-serialize x = serialize_with x with json_defaults
+serialize x = serialize_with default_options x
 
-#@ Encode a value, reading the active options from the ambient
-#@ `JsonOptions` handler once and threading them down.
-pub fun serialize_with : a -> String needs {JsonOptions} where {a: ToJson}
-serialize_with x = {
-  let opts = get_json_options! ()
-  to_string (to_json opts x)
-}
+#@ Encode a value with explicit `Options` (rename_all, omit_nothings, tag
+#@ format, ...). Build the options with the setters, e.g.
+#@ `default_options |> rename_keys CamelCase`.
+pub fun serialize_with : Options -> a -> String where {a: ToJson}
+serialize_with opts x = to_string (to_json opts x)
 
 #@ Call the Generic-derived encoding explicitly, so a hand-written
 #@ `impl ToJson` can start from the derived shape and post-process. Without
@@ -1111,20 +1108,16 @@ skip_elements bs = case skip_ws bs {
 
 #@ Parse and decode a JSON string into the target type using defaults.
 pub fun deserialize : String -> Result a Error where {a: FromJson}
-deserialize s = deserialize_with s with json_defaults
+deserialize s = deserialize_with default_options s
 
-#@ Parse and decode, reading options once from the ambient handler.
-pub fun deserialize_with : String -> Result a Error
-  needs {JsonOptions}
+#@ Parse and decode with explicit `Options` (rename_all, tag format, ...).
+pub fun deserialize_with : Options -> String -> Result a Error
   where {a: FromJson}
-deserialize_with s = {
-  let opts = get_json_options! ()
-  case from_json opts (BS.from_string s) {
-    Ok (v, rest) ->
-      if BS.is_empty (skip_ws rest) then Ok v
-      else Err (InvalidJson "trailing content after JSON value")
-    Err e -> Err e
-  }
+deserialize_with opts s = case from_json opts (BS.from_string s) {
+  Ok (v, rest) ->
+    if BS.is_empty (skip_ws rest) then Ok v
+    else Err (InvalidJson "trailing content after JSON value")
+  Err e -> Err e
 }
 
 #@ Call the Generic-derived decoding explicitly (mirror of `derive`), so a

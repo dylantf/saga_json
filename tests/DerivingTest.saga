@@ -14,8 +14,7 @@ import SagaJson as J (
   ExternallyTagged,
   AdjacentlyTagged,
   InternallyTagged,
-  Untagged,
-  JsonOptions
+  Untagged
 )
 import SagaJson.Encode as E (render, object, string, int)
 import SagaJson.Codec as C
@@ -123,7 +122,7 @@ tests () = {
 
     describe "Options-threading" (fun () -> {
       # If any building-block impl recurses via bare `to_json` instead of
-      # threading the ambient JsonOptions, the rename_all option gets
+      # threading the explicit `Options`, the rename_all option gets
       # dropped somewhere in the tree. This test catches that: the
       # *leaf-most* field must be camelCased too.
       test "rename_all: CamelCase reaches the deepest leaf field" (fun () -> {
@@ -133,31 +132,25 @@ tests () = {
             account_id: 7,
           },
         }
-        let got = serialize_with nested with {
-          get_json_options () = resume with_rename_all CamelCase
-        }
+        let got = serialize_with (with_rename_all CamelCase) nested
         let want =
           "{\"primaryUser\":{\"userInfo\":{\"firstName\":\"Ada\",\"lastName\":\"Lovelace\"},\"accountId\":7}}"
         assert_eq got want
       })
 
       test "rename_all: KebabCase converts underscores to dashes" (fun () -> {
-        let got = serialize_with (MiddleR {
+        let got = serialize_with (with_rename_all KebabCase) (MiddleR {
           user_info: InnerR { first_name: "Ada", last_name: "Lovelace" },
           account_id: 7,
-        }) with {
-          get_json_options () = resume with_rename_all KebabCase
-        }
+        })
         assert_eq got "{\"user-info\":{\"first-name\":\"Ada\",\"last-name\":\"Lovelace\"},\"account-id\":7}"
       })
 
       test "rename_all: ScreamingSnakeCase uppercases" (fun () -> {
-        let got = serialize_with (InnerR {
+        let got = serialize_with (with_rename_all ScreamingSnakeCase) (InnerR {
           first_name: "Ada",
           last_name: "L",
-        }) with {
-          get_json_options () = resume with_rename_all ScreamingSnakeCase
-        }
+        })
         assert_eq got "{\"FIRST_NAME\":\"Ada\",\"LAST_NAME\":\"L\"}"
       })
     })
@@ -170,45 +163,35 @@ tests () = {
         })) "{\"name\":\"x\",\"nickname\":null}")
 
       test "True drops Nothing field" (fun () -> {
-        let got = serialize_with (Settings {
+        let got = serialize_with (with_omit_nothing True) (Settings {
           name: "x",
           nickname: Nothing,
-        }) with {
-          get_json_options () = resume with_omit_nothing True
-        }
+        })
         assert_eq got "{\"name\":\"x\"}"
       })
 
       test "True keeps Just" (fun () -> {
-        let got = serialize_with (Settings {
+        let got = serialize_with (with_omit_nothing True) (Settings {
           name: "x",
           nickname: Just "xx",
-        }) with {
-          get_json_options () = resume with_omit_nothing True
-        }
+        })
         assert_eq got "{\"name\":\"x\",\"nickname\":\"xx\"}"
       })
     })
 
     describe "tag_format: AdjacentlyTagged" (fun () -> {
       test "unit variant emits both tag and (null) content" (fun () -> {
-        let got = serialize_with NoOp with {
-          get_json_options () = resume with_tag_format AdjacentlyTagged
-        }
+        let got = serialize_with (with_tag_format AdjacentlyTagged) NoOp
         assert_eq got "{\"tag\":\"NoOp\",\"content\":null}"
       })
 
       test "primitive payload sits under content_field" (fun () -> {
-        let got = serialize_with (Bare 9) with {
-          get_json_options () = resume with_tag_format AdjacentlyTagged
-        }
+        let got = serialize_with (with_tag_format AdjacentlyTagged) (Bare 9)
         assert_eq got "{\"tag\":\"Bare\",\"content\":9}"
       })
 
       test "record payload sits under content_field" (fun () -> {
-        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
-          get_json_options () = resume with_tag_format AdjacentlyTagged
-        }
+        let got = serialize_with (with_tag_format AdjacentlyTagged) (WrapIt (Payload { x: 1, y: 2 }))
         assert_eq got "{\"tag\":\"WrapIt\",\"content\":{\"x\":1,\"y\":2}}"
       })
 
@@ -219,71 +202,53 @@ tests () = {
             tag_field: "kind",
             content_field: "data",
           }
-        let got = serialize_with (Bare 9) with {
-          get_json_options () = resume opts
-        }
+        let got = serialize_with (opts) (Bare 9)
         assert_eq got "{\"kind\":\"Bare\",\"data\":9}"
       })
     })
 
     describe "tag_format: InternallyTagged" (fun () -> {
       test "unit variant emits just the tag" (fun () -> {
-        let got = serialize_with NoOp with {
-          get_json_options () = resume with_tag_format InternallyTagged
-        }
+        let got = serialize_with (with_tag_format InternallyTagged) NoOp
         assert_eq got "{\"tag\":\"NoOp\"}"
       })
 
       test "object payload merges tag in front" (fun () -> {
-        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
-          get_json_options () = resume with_tag_format InternallyTagged
-        }
+        let got = serialize_with (with_tag_format InternallyTagged) (WrapIt (Payload { x: 1, y: 2 }))
         assert_eq got "{\"tag\":\"WrapIt\",\"x\":1,\"y\":2}"
       })
 
       test "primitive payload falls back to externally-tagged" (fun () -> {
-        let got = serialize_with (Bare 9) with {
-          get_json_options () = resume with_tag_format InternallyTagged
-        }
+        let got = serialize_with (with_tag_format InternallyTagged) (Bare 9)
         assert_eq got "{\"Bare\":9}"
       })
 
       test "custom tag_field is honored on object merge" (fun () -> {
         let opts =
           { default_options | tag_format: InternallyTagged, tag_field: "type" }
-        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
-          get_json_options () = resume opts
-        }
+        let got = serialize_with (opts) (WrapIt (Payload { x: 1, y: 2 }))
         assert_eq got "{\"type\":\"WrapIt\",\"x\":1,\"y\":2}"
       })
     })
 
     describe "tag_format: Untagged" (fun () -> {
       test "unit variant emits null" (fun () -> {
-        let got = serialize_with NoOp with {
-          get_json_options () = resume with_tag_format Untagged
-        }
+        let got = serialize_with (with_tag_format Untagged) NoOp
         assert_eq got "null"
       })
 
       test "primitive variant emits the bare value" (fun () -> {
-        let got = serialize_with (Bare 9) with {
-          get_json_options () = resume with_tag_format Untagged
-        }
+        let got = serialize_with (with_tag_format Untagged) (Bare 9)
         assert_eq got "9"
       })
 
       test "record-payload variant emits the bare object" (fun () -> {
-        let got = serialize_with (WrapIt (Payload { x: 1, y: 2 })) with {
-          get_json_options () = resume with_tag_format Untagged
-        }
+        let got = serialize_with (with_tag_format Untagged) (WrapIt (Payload { x: 1, y: 2 }))
         assert_eq got "{\"x\":1,\"y\":2}"
       })
 
       test "multi-arg variant emits the bare array" (fun () -> {
-        let got = serialize_with (Rect 3 4) with {
-          get_json_options () = resume with_tag_format Untagged
-        }
+        let got = serialize_with (with_tag_format Untagged) (Rect 3 4)
         assert_eq got "[3,4]"
       })
     })
@@ -300,17 +265,13 @@ tests () = {
 
       test "unit_variants_as_strings: False recovers legacy shape" (fun () -> {
         let opts = { default_options | unit_variants_as_strings: False }
-        let got = serialize_with Triangle with {
-          get_json_options () = resume opts
-        }
+        let got = serialize_with (opts) Triangle
         assert_eq got "{\"Triangle\":null}"
       })
 
       test "unit_variants_as_strings respects rename_all" (fun () -> {
         let opts = { default_options | rename_all: ScreamingSnakeCase }
-        let got = serialize_with Triangle with {
-          get_json_options () = resume opts
-        }
+        let got = serialize_with (opts) Triangle
         assert_eq got "\"TRIANGLE\""
       })
     })
