@@ -3,8 +3,8 @@ title: SagaJson
 ---
 
 JSON library top-level: the `Json` opaque type, the shared `Error` type,
-the `Options` record and its `JsonOptions` effect, and the decoder-running
-entry points.
+the `Options` record with its `default_options` and setter functions, and
+the decoder-running entry points.
 
 For encoding, see `SagaJson.Encode`. For decoding primitives and
 combinators, see `SagaJson.Decode`.
@@ -93,31 +93,9 @@ record-update syntax: `{ default_options | rename_all: CamelCase }`,
 or chain the setters: `default_options |> rename_keys CamelCase`.
 Note: `omit_nothings` is encode-only (no-op on decode).
 
-## Effects
-
-### JsonOptions
-
-```saga
-effect JsonOptions {
-  fun get_json_options : Unit -> Options
-}
-```
-
-Ambient options for encode and decode. Read with `get_json_options!`
-inside an `impl ToJson` / `impl FromJson` that needs to consult a knob
-(rename_all, omit_nothings, tag_format, ...). Install at the call
-boundary via `json_defaults`, `json_opts`, or `json_opts_from` below.
-
-## Handlers
-
-### json_defaults
-
-```saga
-handler json_defaults for JsonOptions
-```
-
-The canonical handler: resumes every `get_json_options!` with
-`default_options`. Use directly: `{ ... } with json_defaults`.
+Note: options are passed explicitly as the first argument to
+`serialize_with` / `deserialize_with` (see `SagaJson.Codec`); build a
+value from `default_options` and the setter functions below.
 
 ## Functions
 
@@ -150,29 +128,10 @@ externally-tagged sums with unit variants emitted as bare strings
 `unit_variants_as_strings: False` to recover the legacy
 `{"Admin": null}` shape (or use the `as_tagged` strategy).
 
-### json_opts
-
-```saga
-fun json_opts : Options -> Options -> Handler JsonOptions
-```
-
-Build a handler that resumes `get_json_options!` with
-`f default_options`. The common entry point for setting up an
-options policy at a request boundary:
-
-{ ... } with json_opts (rename_keys CamelCase >> omit_nothings)
-
-### json_opts_from
-
-```saga
-fun json_opts_from : Options -> Options -> Options -> Handler JsonOptions
-```
-
-Build a handler from a custom base rather than `default_options`.
-Use when you already have a named `Options` value (e.g. a
-per-environment configuration) you want to build on top of:
-
-{ ... } with json_opts_from production_opts (rename_keys CamelCase)
+Build a custom `Options` by piping `default_options` through the
+setters below, e.g.
+`default_options |> rename_keys CamelCase |> omit_nothings`, then pass
+the result to `serialize_with` / `deserialize_with`.
 
 ### rename_keys
 

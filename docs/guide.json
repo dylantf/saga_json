@@ -21,7 +21,7 @@
     {
       "slug": "customization",
       "title": "Customization",
-      "description": "Options, the JsonOptions effect, ADT tag formats, key renaming, and the as_enum/as_tagged strategies.",
+      "description": "The Options record, ADT tag formats, key renaming, and the as_enum/as_tagged strategies.",
       "group": "guide"
     },
     {

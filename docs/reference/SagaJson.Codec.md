@@ -10,9 +10,9 @@ This is the throughput path and the eventual `deriving` target. The
 path (dynamic JSON, combinators, post-processing, internally-tagged /
 untagged sums).
 
-Options are read once from the `JsonOptions` effect at the `serialize` /
-`deserialize` boundary and threaded down explicitly as an `Options`
-value, so the per-node code never touches the effect.
+Options are passed explicitly as the first argument to `serialize_with` /
+`deserialize_with` and threaded down through `to_json` / `from_json`;
+`serialize` / `deserialize` use `default_options`.
 
 ## Types
 
@@ -103,11 +103,11 @@ Encode a value to a compact JSON string using the canonical defaults.
 ### serialize_with
 
 ```saga
-fun serialize_with : a -> String needs {JsonOptions} where {a: ToJson}
+fun serialize_with : Options -> a -> String where {a: ToJson}
 ```
 
-Encode a value, reading the active options from the ambient
-`JsonOptions` handler once and threading them down.
+Encode a value using an explicit `Options` value (its first argument),
+threaded down through the derived encoders.
 
 ### derive
 
@@ -188,10 +188,10 @@ Parse and decode a JSON string into the target type using defaults.
 ### deserialize_with
 
 ```saga
-fun deserialize_with : String -> Result a Error needs {JsonOptions} where {a: FromJson}
+fun deserialize_with : Options -> String -> Result a Error where {a: FromJson}
 ```
 
-Parse and decode, reading options once from the ambient handler.
+Parse and decode using an explicit `Options` value (its first argument).
 
 ### derive_from
 

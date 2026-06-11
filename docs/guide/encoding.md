@@ -161,32 +161,27 @@ If you want every variant uniformly tagged, or every variant as a
 bare string, see [`as_enum` and `as_tagged`](customization.md) in the
 customization guide.
 
-## `serialize_with`: customize via the `JsonOptions` effect
+## `serialize_with`: customize with an `Options` value
 
-`serialize` uses `default_options`. To override, install a
-`JsonOptions` handler at the call boundary and use `serialize_with`,
-which reads the ambient options once and threads them down:
+`serialize` uses `default_options`. To override, build an `Options`
+value and pass it as the first argument to `serialize_with`:
 
 ```saga
-import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson as J (rename_keys, CamelCase, default_options)
 import SagaJson.Codec (serialize_with)
 
-let camel = json_opts (rename_keys CamelCase)
-{
-  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
-} with camel
+let camel = rename_keys CamelCase default_options
+serialize_with camel (User { first_name: "Ada", last_name: "Lovelace" })
 # "{"firstName":"Ada","lastName":"Lovelace"}"
 ```
 
-One `with` covers any number of nested serializations under the same
-policy. Setters compose with `>>`:
+Bind the `Options` once and reuse it across many serializations. Build
+multi-knob policies by piping `default_options` through the setters:
 
 ```saga
-let api_shape = json_opts (rename_keys CamelCase >> omit_nothings)
-{
-  serialize_with user
-  serialize_with notification
-} with api_shape
+let api_shape = default_options |> rename_keys CamelCase |> omit_nothings
+serialize_with api_shape user
+serialize_with api_shape notification
 ```
 
 See the [customization guide](customization.md) for the full set of

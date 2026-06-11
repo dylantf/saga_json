@@ -80,8 +80,8 @@ Wide (30 fields):
 
 ## Design decisions settled
 
-- **Options**: read once from the `JsonOptions` effect at the
-  `serialize`/`deserialize` entry point, then **threaded explicitly** as an
+- **Options**: passed explicitly as the first argument to
+  `serialize_with`/`deserialize_with` (no effect), then **threaded** as an
   `Options` value through `to_json` / `from_json`. The trait signatures are
   `to_json : Options -> a -> Iodata` and
   `from_json : Options -> BitString -> Result (a, BitString) Error`.
@@ -212,8 +212,8 @@ Same workload (100k × 30-field `Wide`), byte-identical builder decode logic to
 Encode is fine (325 ms). What was ruled out:
 
 - **Not the entry wrapper.** Decoding via `decode_wide` directly (bypassing the
-  `FromJson` trait dispatch and the per-call `with json_defaults` effect
-  handler) is also ~2150 ms.
+  `FromJson` trait dispatch and the options handling at the entry point) is
+  also ~2150 ms.
 - **Not GC interleave.** Encode and decode are timed in separate loops; decode
   alone is still ~2189 ms (initial version that interleaved encode+decode per
   iter was also ~2229, so interleave wasn't it).

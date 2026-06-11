@@ -160,20 +160,18 @@ If your input uses a different tag shape, see
 [customization](customization.md) for `AdjacentlyTagged`,
 `InternallyTagged`, and `Untagged`.
 
-## `deserialize_with`: customize via the `JsonOptions` effect
+## `deserialize_with`: customize with an `Options` value
 
-`deserialize` uses `default_options`. To override, install a
-`JsonOptions` handler and use `deserialize_with`, which reads the
-ambient options:
+`deserialize` uses `default_options`. To override, build an `Options`
+value and pass it as the first argument to `deserialize_with`:
 
 ```saga
-import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson as J (rename_keys, CamelCase, default_options)
 import SagaJson.Codec (deserialize_with)
 
-{
-  (deserialize_with """{"firstName":"Ada","lastName":"Lovelace"}"""
-    : Result User J.Error)
-} with json_opts (rename_keys CamelCase)
+let camel = rename_keys CamelCase default_options
+(deserialize_with camel """{"firstName":"Ada","lastName":"Lovelace"}"""
+  : Result User J.Error)
 ```
 
 The consumer's options must match whatever the producer used. See the
@@ -207,7 +205,7 @@ decoding, so failures compose normally.
 - Use a combinator decoder (`D.at`/`D.string`/`D.field`/…) when the
   input shape is fixed but different, or you want to mix in
   validation.
-- Use `deserialize_with` under a `JsonOptions` handler when the only
+- Use `deserialize_with` with an `Options` value when the only
   difference is a systematic option like `rename_all` or a tag format.
 - Drop to `D.string` / `D.int` / `D.field` directly when the input
   shape is dynamic or you want fine-grained error messages.

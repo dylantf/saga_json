@@ -24,38 +24,32 @@ Build by record-updating `default_options`:
 let opts = { default_options | rename_all: CamelCase }
 ```
 
-…or chain the setters, which compose with `>>`:
+…or pipe `default_options` through the setters:
 
 ```saga
 import SagaJson as J (rename_keys, omit_nothings, CamelCase)
 
-let tweak = rename_keys CamelCase >> omit_nothings
-let opts = tweak default_options
+let opts = default_options |> rename_keys CamelCase |> omit_nothings
 ```
 
-## Applying options: the `JsonOptions` effect
+## Applying options
 
-`serialize_with` and `deserialize_with` don't take an `Options`
-argument. They read the *ambient* options from a `JsonOptions` handler
-installed at the call boundary with `with`. Build the handler with
-`json_opts`, which takes an `Options -> Options` function applied to
-the defaults:
+`serialize_with` and `deserialize_with` take the `Options` value as
+their first argument:
 
 ```saga
-import SagaJson as J (json_opts, rename_keys, CamelCase)
+import SagaJson as J (rename_keys, CamelCase, default_options)
 import SagaJson.Codec (serialize_with, deserialize_with)
 
-let camel = json_opts (rename_keys CamelCase)
-{
-  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
-} with camel
+let camel = rename_keys CamelCase default_options
+serialize_with camel (User { first_name: "Ada", last_name: "Lovelace" })
 # "{"firstName":"Ada","lastName":"Lovelace"}"
 ```
 
-One `with` covers any number of nested encode/decode calls under the
-same policy. To start from a prebuilt `Options` value instead of the
-defaults, use `json_opts_from base f`, or the `json_defaults` handler
-for plain defaults.
+Bind the `Options` once and reuse it across as many encode/decode calls
+as you like. The plain `serialize` / `deserialize` are just the
+shortcuts for `serialize_with default_options` /
+`deserialize_with default_options`.
 
 ## `rename_all`
 
@@ -77,17 +71,13 @@ record User {
   last_name: String,
 } deriving (ToJson, FromJson)
 
-let camel = json_opts (rename_keys CamelCase)
+let camel = rename_keys CamelCase default_options
 
-{
-  serialize_with (User { first_name: "Ada", last_name: "Lovelace" })
-} with camel
+serialize_with camel (User { first_name: "Ada", last_name: "Lovelace" })
 # "{"firstName":"Ada","lastName":"Lovelace"}"
 
-{
-  (deserialize_with """{"firstName":"Ada","lastName":"Lovelace"}"""
-    : Result User J.Error)
-} with camel
+(deserialize_with camel """{"firstName":"Ada","lastName":"Lovelace"}"""
+  : Result User J.Error)
 # Ok(User { first_name: "Ada", last_name: "Lovelace" })
 ```
 
@@ -121,10 +111,12 @@ and `opts.content_field`. Both fields are always emitted, including
 for unit variants.
 
 ```saga
-let adjacent = json_opts (
-  tag_format AdjacentlyTagged >> tag_field "tag" >> content_field "value"
-)
-{ serialize_with Active } with adjacent
+let adjacent =
+  default_options
+  |> tag_format AdjacentlyTagged
+  |> tag_field "tag"
+  |> content_field "value"
+serialize_with adjacent Active
 # "{"tag":"Active","value":null}"
 ```
 
@@ -166,9 +158,8 @@ record Notification {
   details: Maybe String,
 } deriving (ToJson)
 
-{
-  serialize_with (Notification { message: "hello", details: Nothing })
-} with json_opts omit_nothings
+serialize_with (omit_nothings default_options)
+  (Notification { message: "hello", details: Nothing })
 # "{"message":"hello"}"
 ```
 
@@ -190,7 +181,7 @@ serialize Admin  # ""Admin""
 When `False`, unit variants emit the legacy wrapped form:
 
 ```saga
-{ serialize_with Admin } with json_opts (unit_variants_as_strings False)
+serialize_with (unit_variants_as_strings False default_options) Admin
 # "{"Admin":null}"
 ```
 
@@ -274,7 +265,7 @@ The decode-side mirror is `as_tagged_from`.
 ## Round-trip safety
 
 A round-trip with `serialize_with` followed by `deserialize_with`
-under the *same* `JsonOptions` handler is lossless for every `Options`
+using the *same* `Options` value is lossless for every `Options`
 combination except:
 
 - `omit_nothings: True`. Encode drops null-valued fields. Decode
