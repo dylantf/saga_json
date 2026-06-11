@@ -431,7 +431,7 @@ parse_value bs = case P.parse_value bs {
 
 # --- Iodata string escaping (zero-copy clean runs) ---
 
-fun escape_io : String -> Iodata
+pub fun escape_io : String -> Iodata
 escape_io s = {
   let bs = BS.from_string s
   let frags = scan_str bs 0 0 bs []
@@ -984,7 +984,7 @@ impl FromVariantPayload for And l r where {l: FromJsonArgs, r: FromJsonArgs} {
 }
 
 # Split an object once into (key, raw-value-slice) pairs + the tail after `}`.
-fun parse_object_raw : BitString -> Result (List (String, BitString), BitString) Error
+pub fun parse_object_raw : BitString -> Result (List (String, BitString), BitString) Error
 parse_object_raw bs = case expect 123 bs {
   Ok b0 -> obj_members b0 []
   Err e -> Err e
@@ -1020,7 +1020,7 @@ obj_members bs acc = {
 }
 
 # Split an array once into raw element slices + the tail after `]`.
-fun parse_array_raw : BitString -> Result (List BitString, BitString) Error
+pub fun parse_array_raw : BitString -> Result (List BitString, BitString) Error
 parse_array_raw bs = case expect 91 bs {
   Ok b0 -> arr_members b0 []
   Err e -> Err e
@@ -1046,7 +1046,7 @@ arr_members bs acc = {
   }
 }
 
-fun lookup_raw : String -> List (String, BitString) -> Maybe BitString
+pub fun lookup_raw : String -> List (String, BitString) -> Maybe BitString
 lookup_raw _ [] = Nothing
 lookup_raw k ((k2, v) :: rest) = if k == k2 then Just v else lookup_raw k rest
 
