@@ -325,6 +325,35 @@ tests () = {
       })
     })
 
+    # Records decode via an in-order streaming fast path that bails to the
+    # order-tolerant fallback on any key-order deviation. Both must agree.
+    describe "key order (fast path + fallback)" (fun () -> {
+      test "fields in declaration order (fast path)" (fun () ->
+        assert_eq (deserialize "{\"name\":\"Ada\",\"age\":30}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "fields out of order (fallback)" (fun () ->
+        assert_eq (deserialize "{\"age\":30,\"name\":\"Ada\"}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "extra unknown key (fallback)" (fun () ->
+        assert_eq (deserialize "{\"name\":\"Ada\",\"extra\":true,\"age\":30}" : Result Person J.Error)
+          (Ok (Person { name: "Ada", age: 30 })))
+
+      test "nested record, outer fields reordered (fallback)" (fun () -> {
+        let a = Address {
+          street: "1 St", city: "Town", zip: "00000",
+          coords: Coords { lat: 40.7128, lng: -74.006 },
+        }
+        # Outer keys reordered so the top object takes the fallback; the nested
+        # `coords` (serialized verbatim) stays in order and rides the fast path.
+        let reordered =
+          "{\"coords\":" <> serialize a.coords <>
+          ",\"zip\":\"00000\",\"street\":\"1 St\",\"city\":\"Town\"}"
+        assert_eq (deserialize reordered : Result Address J.Error) (Ok a)
+      })
+    })
+
     describe "failure paths" (fun () -> {
       # Or exhausts all variants; the final branch's tag-mismatch failure
       # propagates as the user-visible error.
