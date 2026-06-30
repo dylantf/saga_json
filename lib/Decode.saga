@@ -2,7 +2,8 @@
 #@
 #@ A decoder is a function `Json -> a needs {Fail Error}`. Compose them by
 #@ ordinary function call; failures short-circuit through the Fail handler.
-#@ Use `SagaJson.parse` or `SagaJson.run` to discharge the effect.
+#@ Use `SagaJson.parse` or `SagaJson.run` to discharge the effect. For typed
+#@ values, hand-write a `FromJson` impl by composing these combinators.
 module SagaJson.Decode
 
 import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
@@ -119,6 +120,46 @@ nullable decoder j = case to_value j {
   VNull -> Nothing
   _ -> Just (decoder j)
 }
+
+# --- FromJson trait ---
+
+#@ Types that can be decoded from JSON. Hand-write `from_json` for your own
+#@ records and ADTs by composing this module's primitive decoders.
+pub trait FromJson a {
+  fun from_json : Json -> a needs {Fail Error}
+}
+
+impl FromJson for String needs {Fail Error} {
+  from_json j = string j
+}
+
+impl FromJson for Int needs {Fail Error} {
+  from_json j = int j
+}
+
+impl FromJson for Float needs {Fail Error} {
+  from_json j = float j
+}
+
+impl FromJson for Bool needs {Fail Error} {
+  from_json j = bool j
+}
+
+impl FromJson for List a where {a: FromJson} needs {Fail Error} {
+  from_json j = list_of from_json j
+}
+
+impl FromJson for Maybe a where {a: FromJson} needs {Fail Error} {
+  from_json j = nullable from_json j
+}
+
+#@ Decode an already-parsed `Json` value via its `FromJson` impl.
+pub fun decode : Json -> Result a Error where {a: FromJson}
+decode j = SagaJson.run from_json j
+
+#@ Parse a JSON string and decode it via `FromJson`.
+pub fun deserialize : String -> Result a Error where {a: FromJson}
+deserialize s = SagaJson.parse from_json s
 
 #@ Post-process a decoded value with an invariant check. The decoder
 #@ produces a candidate value, then the invariant function may `fail!`

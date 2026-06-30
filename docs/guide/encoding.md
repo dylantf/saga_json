@@ -1,18 +1,19 @@
 # Encoding
 
-An encoder is a normal Saga function that returns `Json`.
+For typed values, implement `ToJson`.
 
 ```saga
-import SagaJson as J
 import SagaJson.Encode as E
+import SagaJson.Encode (ToJson)
 
 record Point {
   x: Int,
   y: Int,
 }
 
-fun encode_point : Point -> J.Json
-encode_point p = E.object [("x", E.int p.x), ("y", E.int p.y)]
+impl ToJson for Point {
+  to_json p = E.object [("x", to_json p.x), ("y", to_json p.y)]
+}
 ```
 
 Primitive builders:
@@ -23,7 +24,7 @@ Primitive builders:
 - `E.bool : Bool -> Json`
 - `E.null : Json`
 
-Container builders:
+Container helpers:
 
 ```saga
 E.array [E.int 1, E.int 2]
@@ -32,7 +33,8 @@ E.nullable E.int (Just 42)
 E.object [("name", E.string "Alice"), ("age", E.int 30)]
 ```
 
-Nested data composes by calling the child encoder.
+The `ToJson` trait already has impls for primitives, `List a`, and `Maybe a`,
+so nested data usually composes by calling `to_json`.
 
 ```saga
 record User {
@@ -40,18 +42,20 @@ record User {
   points: List Point,
 }
 
-fun encode_user : User -> J.Json
-encode_user u =
-  E.object [
-    ("name", E.string u.name),
-    ("points", E.list_of encode_point u.points),
-  ]
+impl ToJson for User {
+  to_json u =
+    E.object [
+      ("name", to_json u.name),
+      ("points", to_json u.points),
+    ]
+}
 ```
 
-Render with `E.render`:
+Use `E.encode` when you want the intermediate `Json`, or `E.serialize` when
+you want a compact string.
 
 ```saga
-E.render (encode_point (Point { x: 1, y: 2 }))
+E.serialize (Point { x: 1, y: 2 })
 # "{"x":1,"y":2}"
 ```
 
@@ -63,9 +67,10 @@ type Role =
   | Admin
   | Editor
 
-fun encode_role : Role -> J.Json
-encode_role r = case r {
-  Admin -> E.string "admin"
-  Editor -> E.string "editor"
+impl ToJson for Role {
+  to_json r = case r {
+    Admin -> E.string "admin"
+    Editor -> E.string "editor"
+  }
 }
 ```

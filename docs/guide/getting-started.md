@@ -1,18 +1,20 @@
 # Getting Started
 
-The library has one supported path: define the JSON shape explicitly.
+Define the JSON shape explicitly with hand-written traits.
 
-- Encode with functions that return `Json`, using `SagaJson.Encode`.
-- Decode with functions `Json -> a needs {Fail Error}`, using
-  `SagaJson.Decode`.
-- Use `E.render` to turn `Json` into a compact string.
-- Use `J.parse decoder input` to parse and decode in one step.
+- Encode by implementing `SagaJson.Encode.ToJson`.
+- Decode by implementing `SagaJson.Decode.FromJson`.
+- Compose impls from `SagaJson.Encode` builders and `SagaJson.Decode`
+  combinators.
+- Use `E.serialize` and `D.deserialize` at string boundaries.
 
 ```saga
 import Std.Fail (Fail)
 import SagaJson as J
 import SagaJson.Encode as E
+import SagaJson.Encode (ToJson)
 import SagaJson.Decode as D
+import SagaJson.Decode (FromJson)
 
 record Person {
   name: String,
@@ -20,25 +22,27 @@ record Person {
   email: Maybe String,
 } deriving (Debug)
 
-fun encode_person : Person -> J.Json
-encode_person p =
-  E.object [
-    ("name", E.string p.name),
-    ("age", E.int p.age),
-    ("email", E.nullable E.string p.email),
-  ]
+impl ToJson for Person {
+  to_json p =
+    E.object [
+      ("name", to_json p.name),
+      ("age", to_json p.age),
+      ("email", to_json p.email),
+    ]
+}
 
-fun decode_person : J.Json -> Person needs {Fail J.Error}
-decode_person j = Person {
-  name: D.at "name" D.string j,
-  age: D.at "age" D.int j,
-  email: D.at "email" (D.nullable D.string) j,
+impl FromJson for Person needs {Fail J.Error} {
+  from_json j = Person {
+    name: D.at "name" D.string j,
+    age: D.at "age" D.int j,
+    email: D.at "email" from_json j,
+  }
 }
 
 main () = {
   let alice = Person { name: "Alice", age: 30, email: Just "a@example.com" }
-  let json = E.render (encode_person alice)
-  let back = J.parse decode_person json
+  let json = E.serialize alice
+  let back = D.deserialize json : Result Person J.Error
   dbg back
 }
 ```
@@ -46,5 +50,5 @@ main () = {
 Missing fields and wrong shapes become `InvalidShape` errors. Invalid JSON
 syntax becomes `InvalidJson`.
 
-The removed codec path is intentionally not documented here: no generic
-`ToJson` / `FromJson` traits, no deriving, no runtime `Options` record.
+The removed paths are intentionally absent: no deriving, no runtime `Options`,
+no `SagaJson.Codec`, and no `Symbol`-based reflected field names.

@@ -1,13 +1,13 @@
-#@ Encoding Saga types into JSON by writing encoder functions by hand.
+#@ Encoding Saga types into JSON by writing `ToJson` impls by hand.
 #@
 #@ Use this when you want full control over the output shape — custom key
 #@ names, computed fields, or any JSON layout that doesn't match the type
-#@ definition. An encoder is just a normal function `a -> Json`, assembled
-#@ with `SagaJson.Encode` builders and rendered with `E.render`.
+#@ definition. A `ToJson` impl is assembled with `SagaJson.Encode` builders
+#@ and rendered with `E.serialize`.
 module EncodeHand
 
-import SagaJson (Json)
 import SagaJson.Encode as E
+import SagaJson.Encode (ToJson)
 
 type Role =
   | Admin
@@ -29,36 +29,31 @@ record User {
   tags: List String,
 }
 
-# A value producer returns `Json`. Plain functions replace the old trait path.
-fun encode_role : Role -> Json
-encode_role r =
-  E.string (case r {
+impl ToJson for Role {
+  to_json r = E.string (case r {
     Admin -> "Admin"
     Editor -> "Editor"
     Viewer -> "Viewer"
   })
-
-fun encode_address : Address -> Json
-encode_address a =
-  E.object [("street", E.string a.street), ("city", E.string a.city)]
-
-fun encode_maybe_int : Maybe Int -> Json
-encode_maybe_int m = case m {
-  Nothing -> E.null
-  Just n -> E.int n
 }
 
-fun encode_user : User -> Json
-encode_user u =
-  E.object [
-    ("id", E.int u.id),
-    ("name", E.string u.name),
-    ("email", E.string u.email),
-    ("age", encode_maybe_int u.age),
-    ("role", encode_role u.role),
-    ("address", encode_address u.address),
-    ("tags", E.list_of E.string u.tags),
-  ]
+impl ToJson for Address {
+  to_json a =
+    E.object [("street", E.string a.street), ("city", E.string a.city)]
+}
+
+impl ToJson for User {
+  to_json u =
+    E.object [
+      ("id", to_json u.id),
+      ("name", to_json u.name),
+      ("email", to_json u.email),
+      ("age", to_json u.age),
+      ("role", to_json u.role),
+      ("address", to_json u.address),
+      ("tags", to_json u.tags),
+    ]
+}
 
 pub fun run : Unit -> Unit
 run () = {
@@ -72,5 +67,5 @@ run () = {
     address: Address { street: "123 Fake St", city: "Springfield" },
     tags: ["active", "verified"],
   }
-  dbg (E.render (encode_user u))
+  dbg (E.serialize u)
 }

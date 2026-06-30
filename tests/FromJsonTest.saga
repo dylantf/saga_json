@@ -1,0 +1,90 @@
+module FromJsonTest
+
+import Std.Fail (Fail)
+import Std.Test (Testing, describe, test, assert_eq, assert_err)
+import SagaJson as J
+import SagaJson.Decode as D
+import SagaJson.Decode (FromJson, deserialize)
+import SagaJson.Encode as E
+import SagaJson.Encode (ToJson, serialize)
+
+record Point {
+  x: Int,
+  y: Int,
+} deriving (Debug, Eq)
+
+impl ToJson for Point {
+  to_json p = E.object [("x", to_json p.x), ("y", to_json p.y)]
+}
+
+impl FromJson for Point needs {Fail J.Error} {
+  from_json j = Point {
+    x: D.at "x" D.int j,
+    y: D.at "y" D.int j,
+  }
+}
+
+record Drawing {
+  name: String,
+  points: List Point,
+  note: Maybe String,
+} deriving (Debug, Eq)
+
+impl ToJson for Drawing {
+  to_json d =
+    E.object [
+      ("name", to_json d.name),
+      ("points", to_json d.points),
+      ("note", to_json d.note),
+    ]
+}
+
+impl FromJson for Drawing needs {Fail J.Error} {
+  from_json j = Drawing {
+    name: D.at "name" D.string j,
+    points: D.at "points" from_json j,
+    note: D.at "note" from_json j,
+  }
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "FromJson" (fun () -> {
+    describe "primitive impls" (fun () -> {
+      test "String" (fun () ->
+        assert_eq (deserialize "\"hi\"" : Result String J.Error) (Ok "hi"))
+      test "Int" (fun () ->
+        assert_eq (deserialize "42" : Result Int J.Error) (Ok 42))
+      test "Float" (fun () ->
+        assert_eq (deserialize "1.5" : Result Float J.Error) (Ok 1.5))
+      test "Bool" (fun () ->
+        assert_eq (deserialize "true" : Result Bool J.Error) (Ok True))
+    })
+
+    describe "container impls" (fun () -> {
+      test "List Int" (fun () ->
+        assert_eq (deserialize "[1,2,3]" : Result (List Int) J.Error)
+          (Ok [1, 2, 3]))
+      test "Maybe Just" (fun () ->
+        assert_eq (deserialize "7" : Result (Maybe Int) J.Error) (Ok (Just 7)))
+      test "Maybe Nothing" (fun () ->
+        assert_eq (deserialize "null" : Result (Maybe Int) J.Error) (Ok Nothing))
+    })
+
+    describe "hand-written record impls" (fun () -> {
+      test "flat record" (fun () ->
+        assert_eq (deserialize "{\"x\":1,\"y\":2}" : Result Point J.Error)
+          (Ok (Point { x: 1, y: 2 })))
+      test "record round-trip" (fun () -> {
+        let d = Drawing {
+          name: "sketch",
+          points: [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }],
+          note: Just "draft",
+        }
+        assert_eq (deserialize (serialize d) : Result Drawing J.Error) (Ok d)
+      })
+      test "wrong field type fails" (fun () ->
+        assert_err (deserialize "{\"x\":\"one\",\"y\":2}" : Result Point J.Error))
+    })
+  })
+}

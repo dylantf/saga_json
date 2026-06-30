@@ -2,11 +2,23 @@
 title: SagaJson.Encode
 ---
 
-JSON builders, rendering, and object transforms.
+JSON builders, `ToJson`, rendering, and object transforms.
 
-Construct `Json` values with the primitive functions (`string`, `int`,
-`array`, `object`, ...). Use `render` to turn a `Json` value into a compact
-JSON string.
+Construct `Json` values with primitive builders (`string`, `int`, `array`,
+`object`, ...). For typed values, implement `ToJson`.
+
+## Types
+
+### ToJson
+
+```saga
+trait ToJson a {
+  fun to_json : a -> Json
+}
+```
+
+Types that can be encoded as JSON. The library provides impls for `String`,
+`Int`, `Float`, `Bool`, `List a`, and `Maybe a`.
 
 ## Functions
 
@@ -91,6 +103,22 @@ fun render : Json -> String
 
 Render a `Json` value as a compact JSON string. Output round-trips through
 `SagaJson.parse_string`.
+
+### encode
+
+```saga
+fun encode : a -> Json where {a: ToJson}
+```
+
+Encode a value via its `ToJson` impl.
+
+### serialize
+
+```saga
+fun serialize : a -> String where {a: ToJson}
+```
+
+Encode a value via `ToJson` and render it to a compact JSON string.
 
 ### update_field
 

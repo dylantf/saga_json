@@ -1,0 +1,77 @@
+module ToJsonTest
+
+import Std.Test (Testing, describe, test, assert_eq)
+import SagaJson.Encode as E
+import SagaJson.Encode (ToJson, serialize)
+
+record Point {
+  x: Int,
+  y: Int,
+}
+
+impl ToJson for Point {
+  to_json p = E.object [("x", to_json p.x), ("y", to_json p.y)]
+}
+
+record Polyline {
+  name: String,
+  closed: Bool,
+  pts: List Point,
+  label: Maybe String,
+}
+
+impl ToJson for Polyline {
+  to_json pl =
+    E.object [
+      ("name", to_json pl.name),
+      ("closed", to_json pl.closed),
+      ("pts", to_json pl.pts),
+      ("label", to_json pl.label),
+    ]
+}
+
+pub fun tests : Unit -> Unit needs {Testing}
+tests () = {
+  describe "ToJson" (fun () -> {
+    describe "primitive impls" (fun () -> {
+      test "String" (fun () -> assert_eq (serialize "hi") "\"hi\"")
+      test "Int" (fun () -> assert_eq (serialize 42) "42")
+      test "Float" (fun () -> assert_eq (serialize 1.5) "1.5")
+      test "Bool true" (fun () -> assert_eq (serialize True) "true")
+      test "Bool false" (fun () -> assert_eq (serialize False) "false")
+    })
+
+    describe "container impls" (fun () -> {
+      test "empty List Int" (fun () ->
+        assert_eq (serialize ([] : List Int)) "[]")
+      test "List Int" (fun () -> assert_eq (serialize [1, 2, 3]) "[1,2,3]")
+      test "List String" (fun () ->
+        assert_eq (serialize ["a", "b"]) "[\"a\",\"b\"]")
+      test "Maybe Nothing" (fun () ->
+        assert_eq (serialize (Nothing : Maybe Int)) "null")
+      test "Maybe Just" (fun () ->
+        assert_eq (serialize (Just 7 : Maybe Int)) "7")
+      test "List of Maybe" (fun () ->
+        assert_eq (serialize [Just 1, Nothing, Just 3]) "[1,null,3]")
+    })
+
+    describe "hand-written record impls" (fun () -> {
+      test "flat record" (fun () ->
+        assert_eq (serialize (Point { x: 1, y: 2 })) "{\"x\":1,\"y\":2}")
+      test "nested record list and Maybe" (fun () ->
+        assert_eq (serialize (Polyline {
+          name: "edge",
+          closed: False,
+          pts: [Point { x: 0, y: 0 }, Point { x: 1, y: 1 }],
+          label: Just "hi",
+        })) "{\"name\":\"edge\",\"closed\":false,\"pts\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":1}],\"label\":\"hi\"}")
+      test "Nothing renders null" (fun () ->
+        assert_eq (serialize (Polyline {
+          name: "e",
+          closed: True,
+          pts: [],
+          label: Nothing,
+        })) "{\"name\":\"e\",\"closed\":true,\"pts\":[],\"label\":null}")
+    })
+  })
+}

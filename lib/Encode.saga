@@ -2,7 +2,8 @@
 #@
 #@ Construct `Json` values with the primitive functions (`string`, `int`,
 #@ `array`, `object`, ...). Use `render` to serialize a `Json` value to
-#@ a compact JSON string.
+#@ a compact JSON string. For typed values, hand-write a `ToJson` impl by
+#@ composing these builders.
 module SagaJson.Encode
 
 import Std.Base (Show, Debug)
@@ -66,6 +67,46 @@ pair_to_value (k, v) = (k, to_value v)
 pub fun render : Json -> String
 render j =
   BS.to_string_unchecked (BS.concat (List.reverse (render_acc (to_value j) [])))
+
+# --- ToJson trait ---
+
+#@ Types that can be encoded as JSON. Hand-write `to_json` for your own
+#@ records and ADTs by composing this module's primitive constructors.
+pub trait ToJson a {
+  fun to_json : a -> Json
+}
+
+impl ToJson for String {
+  to_json s = string s
+}
+
+impl ToJson for Int {
+  to_json n = int n
+}
+
+impl ToJson for Float {
+  to_json f = float f
+}
+
+impl ToJson for Bool {
+  to_json b = bool b
+}
+
+impl ToJson for List a where {a: ToJson} {
+  to_json xs = list_of to_json xs
+}
+
+impl ToJson for Maybe a where {a: ToJson} {
+  to_json m = nullable to_json m
+}
+
+#@ Encode a value via its `ToJson` impl.
+pub fun encode : a -> Json where {a: ToJson}
+encode x = to_json x
+
+#@ Encode a value via `ToJson` and render it to a compact JSON string.
+pub fun serialize : a -> String where {a: ToJson}
+serialize x = render (to_json x)
 
 # Accumulate the rendered bytes as a reversed list of BitString fragments,
 # flattened once by `render` via `BS.concat` (iolist_to_binary). This keeps

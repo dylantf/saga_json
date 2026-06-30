@@ -3,19 +3,19 @@
     {
       "slug": "getting-started",
       "title": "Getting started",
-      "description": "Install, first explicit encoder, first explicit decoder.",
+      "description": "Install, first ToJson impl, first FromJson impl.",
       "group": "guide"
     },
     {
       "slug": "encoding",
       "title": "Encoding",
-      "description": "Json builders, list_of, nullable, object, and render.",
+      "description": "ToJson, Json builders, list_of, nullable, object, render, and serialize.",
       "group": "guide"
     },
     {
       "slug": "decoding",
       "title": "Decoding",
-      "description": "Hand-written decoders, field navigation, nullable, list_of, and errors.",
+      "description": "FromJson, field navigation, nullable, list_of, deserialize, and errors.",
       "group": "guide"
     },
     {
