@@ -1,11 +1,6 @@
----
-title: Modules
----
+# API Reference
 
-# Modules
-
-- [SagaJson](SagaJson.md) — JSON library top-level: the `Json` opaque type, the shared `Error` type,
-- [SagaJson.Codec](SagaJson.Codec.md) — Fast JSON codec: encode straight to iodata, decode straight from bytes
-- [SagaJson.Decode](SagaJson.Decode.md) — JSON decoders.
-- [SagaJson.Encode](SagaJson.Encode.md) — JSON encoders and rendering.
-- [SagaJson.Parser](SagaJson.Parser.md) — JSON tokenizer and parser
+- [SagaJson](SagaJson.md) - `Json`, `Error`, `parse_string`, `run`, and `parse`.
+- [SagaJson.Encode](SagaJson.Encode.md) - JSON builders, rendering, and object transforms.
+- [SagaJson.Decode](SagaJson.Decode.md) - Primitive decoders and decoder combinators.
+- [SagaJson.Parser](SagaJson.Parser.md) - Low-level parser and `Value` representation.

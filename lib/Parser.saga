@@ -36,8 +36,7 @@ skip_ws bs = case bs {
 # --- Top-level dispatch ---
 
 #@ Parse a single JSON value, returning it with the unconsumed tail. Unlike
-#@ `parse`, this does not require the input to be fully consumed — used by
-#@ `SagaJson.Codec`'s Value bridge for tag formats that need buffering.
+#@ `parse`, this does not require the input to be fully consumed.
 pub fun parse_value : BitString -> Result (Value, BitString) String
 parse_value bs = {
   let s = skip_ws bs
@@ -76,15 +75,24 @@ escape_byte _ = Nothing
 # Chunks are not UTF-8 validated: `body` is valid by contract and run
 # boundaries fall only on the ASCII bytes `"` and `\`, never inside a
 # multi-byte sequence, so each chunk is valid.
-fun parse_string_body : BitString -> Int -> Int -> BitString -> List BitString -> Result (String, BitString) String
+fun parse_string_body : BitString
+  -> Int
+  -> Int
+  -> BitString
+  -> List BitString
+  -> Result (String, BitString) String
 parse_string_body body skip len rem acc = case rem {
   <<34, rest/binary>> -> case flush_chunk body skip len acc {
     [single] -> Ok (BS.to_string_unchecked single, rest)
-    chunks -> Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
+    chunks ->
+      Ok (BS.to_string_unchecked (BS.concat (List.reverse chunks)), rest)
   }
   <<92, 117, _/binary>> -> Err "\\u escapes not yet supported"
   <<92, c:8, rest/binary>> -> case escape_byte c {
-    Just b -> parse_string_body body (skip + len + 2) 0 rest (BS.from_byte b :: flush_chunk body skip len acc)
+    Just b ->
+      parse_string_body body (skip
+        + len
+        + 2) 0 rest (BS.from_byte b :: flush_chunk body skip len acc)
     Nothing -> Err $"invalid escape sequence: \\{c}"
   }
   <<_c:8, rest/binary>> -> parse_string_body body skip (len + 1) rest acc
@@ -139,7 +147,9 @@ parse_number bs = {
 
 # --- Arrays ---
 
-fun parse_array_items : BitString -> List Value -> Result (Value, BitString) String
+fun parse_array_items : BitString
+  -> List Value
+  -> Result (Value, BitString) String
 parse_array_items bs acc = case parse_value bs {
   Err e -> Err e
   Ok (v, rest) -> {
@@ -172,7 +182,9 @@ parse_object_key bs = case bs {
   _ -> Err "expected string key in object"
 }
 
-fun parse_object_pairs : BitString -> List (String, Value) -> Result (Value, BitString) String
+fun parse_object_pairs : BitString
+  -> List (String, Value)
+  -> Result (Value, BitString) String
 parse_object_pairs bs acc = case parse_object_key (skip_ws bs) {
   Err e -> Err e
   Ok (key, after_key) -> {

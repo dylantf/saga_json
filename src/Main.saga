@@ -1,28 +1,12 @@
-#@ Demos for saga_json. Each module is a self-contained example of one
-#@ usage style; running them all here also keeps every example in the
-#@ compile graph (orphan `src/` modules are otherwise never type-checked
-#@ by `saga check`).
-#@
-#@ - EncodeDerive / DecodeDerive: the common path — `deriving (ToJson)` /
-#@   `deriving (FromJson)` + `serialize` / `deserialize`.
-#@ - EncodeDeriveCustom / DecodeDeriveCustom: deriving + an explicit
-#@   `Options` value for renaming, tag format, omit-nothings, etc.
-#@ - EncodeHand / DecodeHand: full manual control — a hand-written fused
-#@   `impl ToJson`, and a hand-written decoder built from combinators.
+#@ Demos for saga_json. These modules exercise the surviving combinator path:
+#@ write a small encoder function that produces `Json`, and a decoder
+#@ function built from `SagaJson.Decode`.
 module Main
 
-import EncodeDerive
-import EncodeDeriveCustom
-import EncodeHand
-import DecodeDerive
-import DecodeDeriveCustom
 import DecodeHand
+import EncodeHand
 
 main () = {
-  EncodeDerive.run ()
-  EncodeDeriveCustom.run ()
   EncodeHand.run ()
-  DecodeDerive.run ()
-  DecodeDeriveCustom.run ()
   DecodeHand.run ()
 }

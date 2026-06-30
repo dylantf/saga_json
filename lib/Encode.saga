@@ -6,16 +6,11 @@
 module SagaJson.Encode
 
 import Std.Base (Show, Debug)
-import Std.Fail (Fail)
 import Std.BitString as BS
+import Std.Fail (Fail)
 import Std.List
 import Std.String
-import SagaJson (
-  Json,
-  Error,
-  from_value,
-  to_value
-)
+import SagaJson (Json, Error, from_value, to_value)
 import SagaJson.Escape as Escape
 import SagaJson.Parser (Value)
 
@@ -44,6 +39,17 @@ null = from_value VNull
 #@ Encode a list of `Json` values as a JSON array.
 pub fun array : List Json -> Json
 array items = from_value (VArray (List.map to_value items))
+
+#@ Encode a list by applying an element encoder to each item.
+pub fun list_of : (a -> Json) -> List a -> Json
+list_of encode items = array (List.map encode items)
+
+#@ Encode a `Maybe` as either JSON `null` or the encoded contained value.
+pub fun nullable : (a -> Json) -> Maybe a -> Json
+nullable encode m = case m {
+  Nothing -> null
+  Just x -> encode x
+}
 
 #@ Encode a list of (key, value) pairs as a JSON object. Key order is
 #@ preserved.
@@ -92,12 +98,15 @@ render_items items first acc = case items {
   }
 }
 
-fun render_pairs : List (String, Value) -> Bool -> List BitString -> List BitString
+fun render_pairs : List (String, Value)
+  -> Bool
+  -> List BitString
+  -> List BitString
 render_pairs pairs first acc = case pairs {
   [] -> acc
   (k, v) :: rest -> {
     let acc1 = if first then acc else lit_comma :: acc
-    let acc2 = lit_colon :: (render_string k :: acc1)
+    let acc2 = lit_colon :: render_string k :: acc1
     render_pairs rest False (render_acc v acc2)
   }
 }
@@ -164,7 +173,10 @@ fun has_key : String -> List (String, Value) -> Bool
 has_key _ [] = False
 has_key k ((k2, _) :: rest) = if k == k2 then True else has_key k rest
 
-fun do_update : String -> (Json -> Json needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+fun do_update : String
+  -> (Json -> Json needs {Fail Error, ..e})
+  -> List (String, Value)
+  -> List (String, Value)
   needs {Fail Error, ..e}
 do_update key f pairs = case pairs {
   [] -> []
@@ -189,7 +201,9 @@ do_remove key pairs = case pairs {
     else (k, v) :: do_remove key rest
 }
 
-fun do_map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> List (String, Value) -> List (String, Value)
+fun do_map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e})
+  -> List (String, Value)
+  -> List (String, Value)
   needs {Fail Error, ..e}
 do_map_object f pairs = case pairs {
   [] -> []
@@ -203,7 +217,10 @@ do_map_object f pairs = case pairs {
 #@ InvalidShape if the key is missing or the input is not an object.
 #@ The callback may itself raise effects (typically used to nest other
 #@ post-process combinators on the inner Json).
-pub fun update_field : String -> (Json -> Json needs {Fail Error, ..e}) -> Json -> Json
+pub fun update_field : String
+  -> (Json -> Json needs {Fail Error, ..e})
+  -> Json
+  -> Json
   needs {Fail Error, ..e}
 update_field key f j = {
   let pairs = expect_object j
@@ -254,7 +271,9 @@ insert_field key value j = {
 #@ uniform key transformations (e.g. camelCasing every key of a
 #@ dynamic-keyed `Map String _`). Preserves order. The callback may
 #@ itself raise effects.
-pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e}) -> Json -> Json
+pub fun map_object : ((String, Json) -> (String, Json) needs {Fail Error, ..e})
+  -> Json
+  -> Json
   needs {Fail Error, ..e}
 map_object f j = {
   let pairs = expect_object j

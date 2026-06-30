@@ -7,14 +7,19 @@ import SagaJson as J
 import SagaJson.Encode as E
 
 # Run an effectful transformer to a Result so it can be asserted on.
-fun run_t : (J.Json -> J.Json needs {Fail J.Error}) -> J.Json -> Result J.Json J.Error
+fun run_t : (J.Json -> J.Json needs {Fail J.Error})
+  -> J.Json
+  -> Result J.Json J.Error
 run_t f j = J.run f j
 
 # Apply a transformer and assert that the rendered output matches `expected`.
 # Used by every test in this file to keep argument layout single-line-y, since
 # the parser treats multi-line continuations at the same indentation as new
 # statements inside `{...}` test bodies.
-fun assert_renders : J.Json -> (J.Json -> J.Json needs {Fail J.Error}) -> String -> Unit
+fun assert_renders : J.Json
+  -> (J.Json -> J.Json needs {Fail J.Error})
+  -> String
+  -> Unit
   needs {Test}
 assert_renders input edit expected = case run_t edit input {
   Ok j -> assert_eq (E.render j) expected

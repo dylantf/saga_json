@@ -1,142 +1,50 @@
-# Getting started
+# Getting Started
 
-A short walk through encoding a record to JSON and decoding it back.
+The library has one supported path: define the JSON shape explicitly.
 
-## Install
-
-Add `saga_json` to your `project.toml`:
-
-```toml
-[dependencies]
-saga_json = { git = "https://github.com/dylantf/saga_json" }
-```
-
-Then `saga install` to fetch it.
-
-## Three layers
-
-`saga_json` has three layers. Use whichever fits the task:
-
-1. The `Json` value AST (`SagaJson.Encode` / `SagaJson.Decode`). Build
-   values with `string`, `int`, `array`, `object`; serialize with
-   `render`; parse with `parse_string`; navigate with the decoder
-   combinators. Use this when the JSON shape doesn't map cleanly to a
-   Saga type.
-2. The `ToJson` and `FromJson` traits (`SagaJson.Codec`). Write an
-   impl by hand or use `deriving`. Composition is automatic: a record
-   whose fields all have impls gets one too.
-3. The `serialize` and `deserialize` one-shot helpers (`SagaJson.Codec`)
-   on top of the traits. Typed value to JSON string and back, in a
-   single call.
-
-Most code lives at layer 2 or 3.
-
-## Encode
-
-The shortest encoder is `deriving (ToJson)` plus `serialize`:
+- Encode with functions that return `Json`, using `SagaJson.Encode`.
+- Decode with functions `Json -> a needs {Fail Error}`, using
+  `SagaJson.Decode`.
+- Use `E.render` to turn `Json` into a compact string.
+- Use `J.parse decoder input` to parse and decode in one step.
 
 ```saga
-import SagaJson.Codec (ToJson, serialize)
-
-record Person {
-  name: String,
-  age: Int,
-} deriving (ToJson)
-
-main () = {
-  serialize (Person { name: "Alice", age: 30 })
-  # "{"name":"Alice","age":30}"
-}
-```
-
-`deriving (ToJson)` synthesizes the impl. `serialize` encodes the
-value to a compact JSON string in one call.
-
-Lists, `Maybe`, tuples (arity 2 through 10), and the primitive types
-(`String`, `Int`, `Float`, `Bool`) all have impls out of the box.
-
-## Decode
-
-The mirror image. Add `FromJson` to the `deriving` clause and call
-`deserialize`:
-
-```saga
+import Std.Fail (Fail)
 import SagaJson as J
-import SagaJson.Codec (FromJson, deserialize)
+import SagaJson.Encode as E
+import SagaJson.Decode as D
 
 record Person {
   name: String,
   age: Int,
-} deriving (FromJson)
+  email: Maybe String,
+} deriving (Debug)
+
+fun encode_person : Person -> J.Json
+encode_person p =
+  E.object [
+    ("name", E.string p.name),
+    ("age", E.int p.age),
+    ("email", E.nullable E.string p.email),
+  ]
+
+fun decode_person : J.Json -> Person needs {Fail J.Error}
+decode_person j = Person {
+  name: D.at "name" D.string j,
+  age: D.at "age" D.int j,
+  email: D.at "email" (D.nullable D.string) j,
+}
 
 main () = {
-  let input = """{"name":"Alice","age":30}"""
-  deserialize input : Result Person J.Error
-  # Ok(Person { name: "Alice", age: 30 })
+  let alice = Person { name: "Alice", age: 30, email: Just "a@example.com" }
+  let json = E.render (encode_person alice)
+  let back = J.parse decode_person json
+  dbg back
 }
 ```
 
-`deserialize` returns `Result a Error`. On success, `Ok value`. On
-failure (missing field, wrong shape, parse error), `Err e`. The error
-carries a description plus the path to where it went wrong.
+Missing fields and wrong shapes become `InvalidShape` errors. Invalid JSON
+syntax becomes `InvalidJson`.
 
-The type annotation matters. `deserialize` returns a generic
-`Result a Error`, so Saga needs the annotation to know what `a` is.
-
-## Round-trip
-
-Combine the two and anything you encode comes back equal to what you
-put in (modulo `Float` precision):
-
-```saga
-record Person {
-  name: String,
-  age: Int,
-} deriving (Debug, Eq, ToJson, FromJson)
-
-main () = {
-  let alice = Person { name: "Alice", age: 30 }
-  let json = serialize alice
-  let back = deserialize json : Result Person J.Error
-  back == Ok alice  # True
-}
-```
-
-If you pass `Options` on one side, pass the same `Options` on the
-other or the round-trip breaks. See the [customization
-guide](customization.md) for the cases where it does and doesn't
-work.
-
-## ADTs
-
-Sum types derive the same way:
-
-```saga
-type Role =
-  | Admin
-  | Editor
-  | Viewer
-  deriving (ToJson, FromJson)
-```
-
-Unit variants encode as bare JSON strings (`"Admin"`).
-Payload-bearing variants encode as externally-tagged objects
-(`{"Mention": "alice"}`). This matches the `serde` default. The
-decoder also accepts the legacy wrapped form (`{"Admin": null}`) for
-backwards compatibility.
-
-If you want every variant as a bare string regardless of payload, or
-every variant wrapped regardless of arity, see the `as_enum` and
-`as_tagged` strategies in the [customization
-guide](customization.md).
-
-## What's next
-
-- [Encoding guide](encoding.md). Hand-written impls with the
-  `object`/`array` builders, and the `Json` value constructors.
-- [Decoding guide](decoding.md). Decoder combinators, error shapes,
-  navigating nested JSON by hand.
-- [Customization guide](customization.md). `Options`, ADT tag
-  formats, key renaming, strategy functions.
-- [Post-processing guide](post-processing.md). `update_field`,
-  `rename_field`, `map_object` for reshaping `Json` after the fact.
+The removed codec path is intentionally not documented here: no generic
+`ToJson` / `FromJson` traits, no deriving, no runtime `Options` record.

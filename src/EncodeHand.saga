@@ -1,17 +1,13 @@
-#@ Encoding Saga types into JSON by writing `impl ToJson` by hand.
+#@ Encoding Saga types into JSON by writing encoder functions by hand.
 #@
 #@ Use this when you want full control over the output shape — custom key
 #@ names, computed fields, or any JSON layout that doesn't match the type
-#@ definition. A hand-written fused `ToJson` returns `Iodata`: assemble it
-#@ with the `C.object` / `C.array` builders, and produce each field value by
-#@ recursing through `to_json opts`. That recursion both threads the ambient
-#@ `Options` and reuses the library impls (Int, String, Maybe, List, nested
-#@ records, ...), so you only hand-write the parts you actually want to
-#@ control.
+#@ definition. An encoder is just a normal function `a -> Json`, assembled
+#@ with `SagaJson.Encode` builders and rendered with `E.render`.
 module EncodeHand
 
-import SagaJson (Options)
-import SagaJson.Codec as C (ToJson)
+import SagaJson (Json)
+import SagaJson.Encode as E
 
 type Role =
   | Admin
@@ -33,32 +29,36 @@ record User {
   tags: List String,
 }
 
-# A value producer returns `Iodata`. `to_json opts "Admin"` encodes the
-# String as a quoted, escaped JSON string fragment.
-fun encode_role : Options -> Role -> C.Iodata
-encode_role opts r =
-  to_json opts (case r {
+# A value producer returns `Json`. Plain functions replace the old trait path.
+fun encode_role : Role -> Json
+encode_role r =
+  E.string (case r {
     Admin -> "Admin"
     Editor -> "Editor"
     Viewer -> "Viewer"
   })
 
-fun encode_address : Options -> Address -> C.Iodata
-encode_address opts a =
-  C.object [("street", to_json opts a.street), ("city", to_json opts a.city)]
+fun encode_address : Address -> Json
+encode_address a =
+  E.object [("street", E.string a.street), ("city", E.string a.city)]
 
-impl ToJson for User {
-  to_json opts u =
-    C.object [
-      ("id", to_json opts u.id),
-      ("name", to_json opts u.name),
-      ("email", to_json opts u.email),
-      ("age", to_json opts u.age),
-      ("role", encode_role opts u.role),
-      ("address", encode_address opts u.address),
-      ("tags", to_json opts u.tags),
-    ]
+fun encode_maybe_int : Maybe Int -> Json
+encode_maybe_int m = case m {
+  Nothing -> E.null
+  Just n -> E.int n
 }
+
+fun encode_user : User -> Json
+encode_user u =
+  E.object [
+    ("id", E.int u.id),
+    ("name", E.string u.name),
+    ("email", E.string u.email),
+    ("age", encode_maybe_int u.age),
+    ("role", encode_role u.role),
+    ("address", encode_address u.address),
+    ("tags", E.list_of E.string u.tags),
+  ]
 
 pub fun run : Unit -> Unit
 run () = {
@@ -72,5 +72,5 @@ run () = {
     address: Address { street: "123 Fake St", city: "Springfield" },
     tags: ["active", "verified"],
   }
-  dbg (C.serialize u)
+  dbg (E.render (encode_user u))
 }

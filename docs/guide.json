@@ -3,25 +3,19 @@
     {
       "slug": "getting-started",
       "title": "Getting started",
-      "description": "Install, first encode, first decode.",
+      "description": "Install, first explicit encoder, first explicit decoder.",
       "group": "guide"
     },
     {
       "slug": "encoding",
       "title": "Encoding",
-      "description": "Hand-written impls with the object/array builders, deriving (ToJson), serialize.",
+      "description": "Json builders, list_of, nullable, object, and render.",
       "group": "guide"
     },
     {
       "slug": "decoding",
       "title": "Decoding",
-      "description": "Hand-written decoders, deriving (FromJson), deserialize, error handling.",
-      "group": "guide"
-    },
-    {
-      "slug": "customization",
-      "title": "Customization",
-      "description": "The Options record, ADT tag formats, key renaming, and the as_enum/as_tagged strategies.",
+      "description": "Hand-written decoders, field navigation, nullable, list_of, and errors.",
       "group": "guide"
     },
     {

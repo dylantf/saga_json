@@ -1,6 +1,5 @@
 #@ JSON library top-level: the `Json` opaque type, the shared `Error` type,
-#@ the `Options` record and its setters, and the decoder-running
-#@ entry points.
+#@ and the decoder-running entry points.
 #@
 #@ For encoding, see `SagaJson.Encode`. For decoding primitives and
 #@ combinators, see `SagaJson.Decode`.
@@ -8,8 +7,6 @@ module SagaJson
 
 import Std.Base (Debug, Eq)
 import Std.Fail (Fail)
-import Std.List
-import Std.String
 import SagaJson.Parser (Value)
 
 #@ A JSON value. Opaque so the internal representation can evolve.
@@ -48,141 +45,6 @@ from_value v = Json v
 pub fun to_value : Json -> Value
 to_value j = case j {
   Json v -> v
-}
-
-# --- Options ---
-#
-# Options live in the root module because both encode and decode consume
-# them. Uniform knobs only — anything that names a specific field belongs
-# in a hand-written impl. An `Options` value is passed explicitly as the
-# first argument to `serialize_with` / `deserialize_with`; `serialize` /
-# `deserialize` use `default_options`.
-
-#@ How record field names and variant names are transformed before
-#@ emission (encode) or matched against input (decode). Source
-#@ convention is snake_case Saga identifiers (the type-level Symbol
-#@ reflects the source name verbatim); `rename_all` is applied to that
-#@ source name symmetrically on both directions.
-pub type NameStyle =
-  | AsIs
-  | CamelCase
-  | KebabCase
-  | SnakeCase
-  | ScreamingSnakeCase
-
-#@ How sum-type variants are tagged in JSON.
-#@
-#@ - `ExternallyTagged` (default): `{"Variant": payload}` for variants
-#@    that carry a payload; unit variants emit as bare strings
-#@    (`"Admin"`) when `unit_variants_as_strings` is True (the default).
-#@ - `AdjacentlyTagged`: `{<tag_field>: "Variant", <content_field>: payload}` —
-#@    both fields always emitted, including for unit (U1) variants where
-#@    `content_field` carries `null`.
-#@ - `InternallyTagged`: tag merged into the payload object as `<tag_field>`.
-#@    Only well-defined when the payload renders to a JSON object (single
-#@    record-valued variants) or `null` (unit variants). For primitive /
-#@    array payloads the encoder falls back to `ExternallyTagged` — same
-#@    restriction as serde.
-#@ - `Untagged`: emit the payload directly; variant identity is lost.
-pub type TagFormat =
-  | ExternallyTagged
-  | AdjacentlyTagged
-  | InternallyTagged
-  | Untagged
-
-#@ Uniform codec options. Shared between encode and decode so a single
-#@ `Options` value drives a symmetric round-trip. Construct with
-#@ record-update syntax: `{ default_options | rename_all: CamelCase }`,
-#@ or chain the setters: `default_options |> rename_keys CamelCase`.
-#@ Note: `omit_nothings` is encode-only (no-op on decode).
-pub record Options {
-  rename_all: NameStyle,
-  omit_nothings: Bool,
-  tag_format: TagFormat,
-  tag_field: String,
-  content_field: String,
-  unit_variants_as_strings: Bool,
-}
-
-#@ The canonical defaults: no renaming, emit nulls for `Maybe Nothing`,
-#@ externally-tagged sums with unit variants emitted as bare strings
-#@ (matching serde and most other modern JSON libraries). Set
-#@ `unit_variants_as_strings: False` to recover the legacy
-#@ `{"Admin": null}` shape (or use the `as_tagged` strategy).
-pub fun default_options : Options
-default_options = Options {
-  rename_all: AsIs,
-  omit_nothings: False,
-  tag_format: ExternallyTagged,
-  tag_field: "tag",
-  content_field: "content",
-  unit_variants_as_strings: True,
-}
-
-# --- Options setters ---
-#
-# All setters have shape `... -> Options -> Options` so they chain with
-# `|>` and compose with `>>`, building the `Options` value you pass to
-# `serialize_with` / `deserialize_with`:
-#
-#   let opts = default_options |> rename_keys CamelCase |> omit_nothings
-#   serialize_with opts value
-
-#@ Set the `rename_all` field.
-pub fun rename_keys : NameStyle -> Options -> Options
-rename_keys ns o = { o | rename_all: ns }
-
-#@ Set `omit_nothings: True`. Encode-only; no-op on the decode side
-#@ (decoders treat a missing field as an error, not as `Nothing`).
-pub fun omit_nothings : Options -> Options
-omit_nothings o = { o | omit_nothings: True }
-
-#@ Set the `tag_format` field.
-pub fun tag_format : TagFormat -> Options -> Options
-tag_format tf o = { o | tag_format: tf }
-
-#@ Set the `tag_field` name (used by AdjacentlyTagged / InternallyTagged).
-pub fun tag_field : String -> Options -> Options
-tag_field name o = { o | tag_field: name }
-
-#@ Set the `content_field` name (used by AdjacentlyTagged).
-pub fun content_field : String -> Options -> Options
-content_field name o = { o | content_field: name }
-
-#@ Set the `unit_variants_as_strings` field. Pass False to recover the
-#@ legacy `{"Admin": null}` wrapped shape; True is the default.
-pub fun unit_variants_as_strings : Bool -> Options -> Options
-unit_variants_as_strings b o = { o | unit_variants_as_strings: b }
-
-# --- Name-style helpers ---
-#
-# Library-internal. Both encode and decode apply this transform to the
-# source identifier reflected via `symbol_name`, giving symmetric
-# `rename_all` semantics in both directions.
-
-#@ Apply a NameStyle transform to a Saga source identifier (snake_case
-#@ by convention). Library-internal; called by both the encoder and the
-#@ decoder so a single Options value drives a symmetric round-trip.
-pub fun apply_name_style : NameStyle -> String -> String
-apply_name_style ns s = case ns {
-  AsIs -> s
-  SnakeCase -> s
-  CamelCase -> snake_to_camel s
-  KebabCase -> String.replace_all "_" "-" s
-  ScreamingSnakeCase -> String.to_upper s
-}
-
-fun snake_to_camel : String -> String
-snake_to_camel s = case String.split "_" s {
-  [] -> s
-  h :: rest -> h <> String.join "" (List.map capitalize rest)
-}
-
-fun capitalize : String -> String
-capitalize s = {
-  let n = String.length s
-  if n == 0 then s
-  else String.to_upper (String.slice 0 1 s) <> String.slice 1 (n - 1) s
 }
 
 #@ Parse a JSON string into a Json value, without applying a decoder.

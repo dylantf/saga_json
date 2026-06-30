@@ -9,12 +9,7 @@ import Std.Base (Show, Debug, Eq, Ord, Semigroup, Enum)
 import Std.Fail (Fail)
 import Std.Int
 import Std.List
-import SagaJson (
-  Json,
-  Error,
-  to_value,
-  from_value
-)
+import SagaJson (Json, Error, to_value, from_value)
 import SagaJson.Parser (Value)
 
 # --- Helpers ---
@@ -135,6 +130,9 @@ nullable decoder j = case to_value j {
 #@   nonneg_age = refine (fun u -> if u.age >= 0 then u
 #@                                  else fail! (InvalidShape "age >= 0" "negative" []))
 #@                       person
-pub fun refine : (a -> a needs {Fail Error}) -> (Json -> a needs {Fail Error, ..e}) -> Json -> a
+pub fun refine : (a -> a needs {Fail Error})
+  -> (Json -> a needs {Fail Error, ..e})
+  -> Json
+  -> a
   needs {Fail Error, ..e}
 refine invariant decoder j = invariant (decoder j)

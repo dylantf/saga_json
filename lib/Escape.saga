@@ -25,7 +25,12 @@ escape_string s = {
 # unescaped run. On a special byte, flush the run as a slice of `orig` and
 # push its escape; on an ordinary byte, extend the run. Chunks accumulate
 # in reverse order.
-fun scan : BitString -> Int -> Int -> BitString -> List BitString -> List BitString
+fun scan : BitString
+  -> Int
+  -> Int
+  -> BitString
+  -> List BitString
+  -> List BitString
 scan orig skip len rem acc = case rem {
   <<>> -> flush orig skip len acc
   <<34, rest/binary>> ->
@@ -43,14 +48,15 @@ scan orig skip len rem acc = case rem {
   <<13, rest/binary>> ->
     scan orig (skip + len + 1) 0 rest (esc_r :: flush orig skip len acc)
   <<c:8, rest/binary>> when c < 32 ->
-    scan orig (skip + len + 1) 0 rest (unicode_escape c :: flush orig skip len acc)
+    scan orig (skip
+      + len
+      + 1) 0 rest (unicode_escape c :: flush orig skip len acc)
   <<_c:8, rest/binary>> -> scan orig skip (len + 1) rest acc
 }
 
 # Emit the unescaped run [skip, skip+len) as one zero-copy slice, if non-empty.
 fun flush : BitString -> Int -> Int -> List BitString -> List BitString
-flush orig skip len acc =
-  if len > 0 then BS.slice skip len orig :: acc else acc
+flush orig skip len acc = if len > 0 then BS.slice skip len orig :: acc else acc
 
 fun dquote : BitString
 dquote = BS.from_byte 34

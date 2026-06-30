@@ -1,8 +1,9 @@
 module EncodeTest
 
-import Std.Test (Testing, describe, test, assert_eq, assert_true)
 import Std.BitString as BS
 import Std.String
+
+import Std.Test (Testing, describe, test, assert_eq, assert_true)
 import SagaJson.Encode as E
 
 # Build a String from raw bytes — for testing sub-0x20 escape behavior where
@@ -24,7 +25,8 @@ tests () = {
       test "negative int" (fun () -> assert_eq (E.render (E.int (-7))) "-7")
       test "zero int" (fun () -> assert_eq (E.render (E.int 0)) "0")
       test "empty string" (fun () -> assert_eq (E.render (E.string "")) "\"\"")
-      test "plain string" (fun () -> assert_eq (E.render (E.string "hello")) "\"hello\"")
+      test "plain string" (fun () ->
+        assert_eq (E.render (E.string "hello")) "\"hello\"")
     })
 
     describe "string escaping" (fun () -> {
@@ -36,8 +38,7 @@ tests () = {
         assert_eq (E.render (E.string "a\nb")) "\"a\\nb\"")
       test "carriage return" (fun () ->
         assert_eq (E.render (E.string "a\rb")) "\"a\\rb\"")
-      test "tab" (fun () ->
-        assert_eq (E.render (E.string "a\tb")) "\"a\\tb\"")
+      test "tab" (fun () -> assert_eq (E.render (E.string "a\tb")) "\"a\\tb\"")
       test "backspace (0x08)" (fun () ->
         assert_eq (E.render (E.string (bytes_to_string <<97, 8, 98>>))) "\"a\\bb\"")
       test "form feed (0x0c)" (fun () ->
@@ -47,9 +48,7 @@ tests () = {
       test "sub-0x20 byte uses \\u00XX (0x1f)" (fun () ->
         assert_eq (E.render (E.string (bytes_to_string <<97, 31, 98>>))) "\"a\\u001fb\"")
       test "DEL (0x7f) passes through — not a JSON control char" (fun () ->
-        assert_eq
-          (E.render (E.string (bytes_to_string <<97, 127, 98>>)))
-          (bytes_to_string <<34, 97, 127, 98, 34>>))
+        assert_eq (E.render (E.string (bytes_to_string <<97, 127, 98>>))) (bytes_to_string <<34, 97, 127, 98, 34>>))
       test "forward slash NOT escaped" (fun () ->
         assert_eq (E.render (E.string "a/b")) "\"a/b\"")
       test "UTF-8 multibyte passes through (é = 0xc3 0xa9)" (fun () ->
@@ -58,17 +57,28 @@ tests () = {
 
     describe "arrays" (fun () -> {
       test "empty" (fun () -> assert_eq (E.render (E.array [])) "[]")
-      test "single int" (fun () -> assert_eq (E.render (E.array [E.int 1])) "[1]")
+      test "single int" (fun () ->
+        assert_eq (E.render (E.array [E.int 1])) "[1]")
       test "multiple ints" (fun () ->
         assert_eq (E.render (E.array [E.int 1, E.int 2, E.int 3])) "[1,2,3]")
       test "mixed types" (fun () ->
-        assert_eq
-          (E.render (E.array [E.int 1, E.string "two", E.bool True, E.null]))
-          "[1,\"two\",true,null]")
+        assert_eq (E.render (E.array [
+          E.int 1,
+          E.string "two",
+          E.bool True,
+          E.null,
+        ])) "[1,\"two\",true,null]")
       test "nested arrays" (fun () ->
-        assert_eq
-          (E.render (E.array [E.array [E.int 1], E.array []]))
-          "[[1],[]]")
+        assert_eq (E.render (E.array [
+          E.array [E.int 1],
+          E.array [],
+        ])) "[[1],[]]")
+      test "list_of applies an element encoder" (fun () ->
+        assert_eq (E.render (E.list_of E.int [1, 2, 3])) "[1,2,3]")
+      test "nullable encodes Nothing as null" (fun () ->
+        assert_eq (E.render (E.nullable E.string Nothing)) "null")
+      test "nullable encodes Just with the child encoder" (fun () ->
+        assert_eq (E.render (E.nullable E.string (Just "hi"))) "\"hi\"")
     })
 
     describe "objects" (fun () -> {
@@ -76,21 +86,21 @@ tests () = {
       test "single field" (fun () ->
         assert_eq (E.render (E.object [("x", E.int 1)])) "{\"x\":1}")
       test "multiple fields preserve order" (fun () ->
-        assert_eq
-          (E.render (E.object [("a", E.int 1), ("b", E.int 2), ("c", E.int 3)]))
-          "{\"a\":1,\"b\":2,\"c\":3}")
+        assert_eq (E.render (E.object [
+          ("a", E.int 1),
+          ("b", E.int 2),
+          ("c", E.int 3),
+        ])) "{\"a\":1,\"b\":2,\"c\":3}")
       test "nested objects" (fun () ->
-        assert_eq
-          (E.render (E.object [("outer", E.object [("inner", E.int 1)])]))
-          "{\"outer\":{\"inner\":1}}")
+        assert_eq (E.render (E.object [
+          ("outer", E.object [("inner", E.int 1)]),
+        ])) "{\"outer\":{\"inner\":1}}")
       test "keys are escaped" (fun () ->
-        assert_eq
-          (E.render (E.object [("a\"b", E.int 1)]))
-          "{\"a\\\"b\":1}")
+        assert_eq (E.render (E.object [("a\"b", E.int 1)])) "{\"a\\\"b\":1}")
       test "value with newline" (fun () ->
-        assert_eq
-          (E.render (E.object [("msg", E.string "line1\nline2")]))
-          "{\"msg\":\"line1\\nline2\"}")
+        assert_eq (E.render (E.object [
+          ("msg", E.string "line1\nline2"),
+        ])) "{\"msg\":\"line1\\nline2\"}")
     })
 
     describe "float rendering (RFC 8259 compliance probe)" (fun () -> {
